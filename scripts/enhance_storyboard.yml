@@ -1,0 +1,91 @@
+import json
+import os
+from pathlib import Path
+
+from google import genai
+from google.genai import types
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+MODEL = "gemini-2.5-flash"
+
+API_KEY = os.environ["GEMINI_API_KEY"]
+
+STYLE = os.environ["IMAGE_STYLE"]
+
+CHARACTER = os.environ["CHARACTER_REFERENCE"]
+
+INPUT = "output/json/storyboard.json"
+
+OUTPUT = "output/json/enhanced_storyboard.json"
+
+client = genai.Client(api_key=API_KEY)
+
+# ============================================================
+# LOAD STORYBOARD
+# ============================================================
+
+with open(INPUT, encoding="utf8") as f:
+    storyboard = json.load(f)
+
+# ============================================================
+# RESPONSE SCHEMA
+# ============================================================
+
+SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "scenes": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+
+                    "scene_number":{"type":"INTEGER"},
+
+                    "start_timestamp":{"type":"STRING"},
+
+                    "end_timestamp":{"type":"STRING"},
+
+                    "camera":{"type":"STRING"},
+
+                    "camera_angle":{"type":"STRING"},
+
+                    "lens":{"type":"STRING"},
+
+                    "composition":{"type":"STRING"},
+
+                    "lighting":{"type":"STRING"},
+
+                    "color_palette":{"type":"STRING"},
+
+                    "environment":{"type":"STRING"},
+
+                    "emotion":{"type":"STRING"},
+
+                    "facial_expression":{"type":"STRING"},
+
+                    "body_pose":{"type":"STRING"},
+
+                    "visual_focus":{"type":"STRING"},
+
+                    "transition":{"type":"STRING"},
+
+                    "negative_prompt":{"type":"STRING"},
+
+                    "image_prompt":{"type":"STRING"}
+
+                },
+
+                "required":[
+                    "scene_number",
+                    "start_timestamp",
+                    "end_timestamp",
+                    "image_prompt"
+                ]
+            }
+        }
+    }
+}
