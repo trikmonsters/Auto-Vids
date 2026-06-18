@@ -1,0 +1,235 @@
+name: 🎬 AI Video Generator Ultimate
+
+on:
+
+  workflow_dispatch:
+
+    inputs:
+
+      narration:
+
+        description: "Narration Text"
+
+        required: true
+
+        type: string
+
+      character_reference:
+
+        description: "Character Reference Image URL"
+
+        required: true
+
+        type: string
+
+      voice:
+
+        description: "Voice"
+
+        required: true
+
+        default: "Sulafat"
+
+        type: choice
+
+        options:
+
+          - Sulafat
+          - Sadaltager
+          - Gacrux
+          - Vindemiatrix
+
+      language:
+
+        description: "Language"
+
+        required: true
+
+        default: "id-ID"
+
+        type: choice
+
+        options:
+
+          - id-ID
+          - en-US
+
+      image_style:
+
+        description: "Image Style"
+
+        required: true
+
+        default: "Anime Cinematic"
+
+        type: choice
+
+        options:
+
+          - Anime Cinematic
+          - Disney
+          - Pixar
+          - Dreamworks
+          - Ghibli
+          - Semi Realistic
+          - Digital Painting
+          - Comic
+
+      resolution:
+
+        description: "Storyboard Detail"
+
+        required: true
+
+        default: "Ultra"
+
+        type: choice
+
+        options:
+
+          - High
+          - Ultra
+          - Extreme
+
+permissions:
+
+  contents: write
+
+jobs:
+
+  generate:
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 60
+
+    env:
+
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      NARRATION: ${{ github.event.inputs.narration }}
+
+      CHARACTER_REFERENCE: ${{ github.event.inputs.character_reference }}
+
+      VOICE_NAME: ${{ github.event.inputs.voice }}
+
+      LANGUAGE: ${{ github.event.inputs.language }}
+
+      IMAGE_STYLE: ${{ github.event.inputs.image_style }}
+
+      QUALITY: ${{ github.event.inputs.resolution }}
+
+    steps:
+
+      - name: Checkout
+
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+
+        uses: actions/setup-python@v5
+
+        with:
+
+          python-version: "3.12"
+
+      - name: Cache Pip
+
+        uses: actions/cache@v4
+
+        with:
+
+          path: ~/.cache/pip
+
+          key: ${{ runner.os }}-genai
+
+      - name: Install Dependencies
+
+        run: |
+
+          python -m pip install --upgrade pip
+
+          pip install \
+            google-genai \
+            requests \
+            pandas \
+            numpy \
+            pillow \
+            tqdm \
+            pydub
+
+      - name: Create Workspace
+
+        run: |
+
+          mkdir -p output
+
+          mkdir -p temp
+
+          mkdir -p output/storyboard
+
+          mkdir -p output/prompts
+
+          mkdir -p output/audio
+
+          mkdir -p output/json
+
+          mkdir -p output/csv
+
+          mkdir -p output/markdown
+
+      - name: Save Narration
+
+        run: |
+
+          cat > narration.txt << EOF
+          $NARRATION
+          EOF
+
+      - name: Download Character Reference
+
+        run: |
+
+          python - << 'PY'
+
+          import requests
+
+          url="${{ env.CHARACTER_REFERENCE }}"
+
+          r=requests.get(url,timeout=60)
+
+          r.raise_for_status()
+
+          open("character_reference.png","wb").write(r.content)
+
+          print("Character image downloaded")
+
+          PY
+
+      - name: Generate TTS
+
+        run: |
+
+          python scripts/generate_tts.py
+
+      - name: Analyze Audio
+
+        run: |
+
+          python scripts/analyze_audio.py
+
+      - name: Export Files
+
+        run: |
+
+          python scripts/export_storyboard.py
+
+      - name: Upload Artifact
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: AI-Video-Assets
+
+          path: output/
