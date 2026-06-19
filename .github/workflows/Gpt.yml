@@ -1,53 +1,288 @@
-name: Gemini Audio Analysis
+name: Text → TTS → Audio Analysis
 
 on:
   workflow_dispatch:
     inputs:
-      audio:
-        description: "Audio file path"
+
+      text:
+        description: "Text yang akan dijadikan narasi"
         required: true
-        default: "audio.mp3"
+        type: string
+
+      voice:
+        description: "Gemini Voice"
+        required: false
+        default: "Sulafat"
+
+      language:
+        description: "Language"
+        required: false
+        default: "id-ID"
+
+      paragraph_gap:
+        description: "Gap antar paragraf (detik)"
+        required: false
+        default: "1"
+
+permissions:
+  contents: write
 
 jobs:
-  analyze:
+
+  pipeline:
+
     runs-on: ubuntu-latest
 
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      TEXT: ${{ github.event.inputs.text }}
+
+      VOICE_NAME: ${{ github.event.inputs.voice }}
+
+      LANGUAGE: ${{ github.event.inputs.language }}
+
+      PARA_GAP: ${{ github.event.inputs.paragraph_gap }}
+
     steps:
+
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: 22
+          python-version: "3.12"
 
-      - run: npm install @google/genai
+      - name: Install Python Packages
 
+        run: |
+
+          python -m pip install --upgrade pip
+
+          pip install google-genai
+
+      - name: Prepare Workspace
+
+        run: |
+
+          mkdir -p output
+          mkdir -p release
+
+          printf "%s" "$TEXT" > tts-script.txt
+
+          echo "========================================="
+          echo "Input Characters : $(wc -m < tts-script.txt)"
+          echo "Input Words      : $(wc -w < tts-script.txt)"
+          echo "========================================="
+
+      - name: Generate TTS Audio
+
+        env:
+
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+        run: |
+
+          python3 << 'PYEOF'
+
+          import os
+          import wave
+          import struct
+          import time
+          import textwrap
+
+          from google import genai
+          from google.genai import types
+
+          API_KEY=os.environ["GEMINI_API_KEY"]
+
+          VOICE=os.environ["VOICE_NAME"]
+
+          LANGUAGE=os.environ["LANGUAGE"]
+
+          GAP=float(os.environ["PARA_GAP"])
+
+          SAMPLE_RATE=24000
+
+          CHANNELS=1
+
+          SAMPLE_WIDTH=2
+
+          print()
+
+          print("="*70)
+          print(" GEMINI TEXT TO SPEECH ")
+          print("="*70)
+
+          with open("tts-script.txt","r",encoding="utf8") as f:
+
+              raw=f.read().strip()
+
+          paragraphs=[p.strip() for p in raw.split("\n\n") if p.strip()]
+
+          print(f"Voice      : {VOICE}")
+          print(f"Language   : {LANGUAGE}")
+          print(f"Paragraphs : {len(paragraphs)}")
+          print()
+
+          client=genai.Client(api_key=API_KEY)
+
+          def silence(sec):
+
+              n=int(SAMPLE_RATE*sec)
+
+              return struct.pack(f"<{n}h",*([0]*n))
+
+          pcm=[]
+
+          def prompt(txt,index,total):
+
+              if index==0:
+
+                  style="Speak warmly and slowly."
+
+              elif index==total-1:
+
+                  style="Speak gently and emotionally."
+
+              else:
+
+                  style="Speak naturally like a professional narrator."
+
+              return f"""
+          Language : {LANGUAGE}
+          
+          {style}
+          
+          {textwrap.dedent(txt)}
+          """
+
+          for i,p in enumerate(paragraphs):
+
+              print("-"*70)
+
+              print(f"Paragraph {i+1}/{len(paragraphs)}")
+
+              print(textwrap.shorten(p,80))
+
+              for retry in range(4):
+
+                  try:
+
+                      r=client.models.generate_content(
+
+                          model="gemini-3.1-flash-tts-preview",
+
+                          contents=prompt(p,i,len(paragraphs)),
+
+                          config=types.GenerateContentConfig(
+
+                              response_modalities=["AUDIO"],
+
+                              speech_config=types.SpeechConfig(
+
+                                  voice_config=types.VoiceConfig(
+
+                                      prebuilt_voice_config=types.PrebuiltVoiceConfig(
+
+                                          voice_name=VOICE
+
+                                      )
+
+                                  )
+
+                              )
+
+                          )
+
+                      )
+
+                      audio=r.candidates[0].content.parts[0].inline_data.data
+
+                      pcm.append(audio)
+
+                      print("✓ generated")
+
+                      break
+
+                  except Exception as e:
+
+                      print(e)
+
+                      time.sleep(2**retry)
+
+              if i!=len(paragraphs)-1:
+
+                  pcm.append(silence(GAP))
+
+                  print(f"Gap {GAP}s")
+
+          out="output/audio.wav"
+
+          with wave.open(out,"wb") as wf:
+
+              wf.setnchannels(CHANNELS)
+
+              wf.setsampwidth(SAMPLE_WIDTH)
+
+              wf.setframerate(SAMPLE_RATE)
+
+              wf.writeframes(b"".join(pcm))
+
+          duration=sum(len(x) for x in pcm)/(SAMPLE_RATE*SAMPLE_WIDTH)
+
+          print()
+          print("="*70)
+          print("DONE")
+          print("="*70)
+          print(f"Output   : {out}")
+          print(f"Duration : {duration:.1f} seconds")
+          print()
+
+          PYEOF
+
+    
       - name: Analyze Audio
+
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          AUDIO_FILE: ${{ github.event.inputs.audio }}
+
         run: |
-          node <<'EOF'
 
-          import { GoogleGenAI } from "@google/genai";
-          import fs from "fs";
+          python3 << 'PYEOF'
 
-          const ai = new GoogleGenAI({
-            apiKey: process.env.GEMINI_API_KEY
-          });
+          import json
+          import os
+          import textwrap
 
-          const file = await ai.files.upload({
-            file: process.env.AUDIO_FILE,
-            config: {
-              mimeType: "audio/mpeg"
-            }
-          });
+          from google import genai
+          from google.genai import types
 
-          const prompt = `
-          You are an expert video storyboard creator.
+          client = genai.Client(
+              api_key=os.environ["GEMINI_API_KEY"]
+          )
+
+          print()
+          print("="*70)
+          print(" AUDIO ANALYSIS ")
+          print("="*70)
+          print()
+
+          print("Uploading audio...")
+
+          audio = client.files.upload(
+              file="output/audio.wav"
+          )
+
+          print("✓ Upload selesai")
+          print(audio.uri)
+          print()
+
+          prompt = """
+          You are an expert movie storyboard creator.
           
-          Analyze this audio.
+          Analyze this narration audio.
           
-          Return ONLY JSON.
+          Return ONLY valid JSON.
           
           Schema:
           
@@ -57,9 +292,12 @@ jobs:
               {
                 "start":"00:00",
                 "end":"00:05",
+                "duration":5,
                 "text":"",
+                "subtitle":"",
                 "image_prompt":"",
                 "camera":"",
+                "lighting":"",
                 "emotion":"",
                 "keywords":[]
               }
@@ -68,46 +306,181 @@ jobs:
           
           Rules:
           
-          - Split every 3-8 seconds.
-          - Timestamp must match narration.
-          - "text" = spoken narration.
-          - "image_prompt" = cinematic AI image prompt.
-          - Camera angle included.
-          - No markdown.
-          - JSON only.
-          `;
+          - Split naturally every 3–8 seconds.
+          - Timestamp MUST follow narration.
+          - text = spoken narration.
+          - subtitle = clean subtitle.
+          - image_prompt = highly detailed cinematic AI image prompt.
+          - camera = camera angle.
+          - lighting = movie lighting.
+          - emotion = dominant emotion.
+          - keywords = array.
+          - Output JSON only.
+          """
 
-          const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  {
-                    fileData: {
-                      fileUri: file.uri,
-                      mimeType: file.mimeType
-                    }
-                  },
-                  {
-                    text: prompt
-                  }
-                ]
-              }
-            ],
-            config: {
-              responseMimeType: "application/json"
-            }
-          });
+          response = client.models.generate_content(
 
-          fs.mkdirSync("output",{recursive:true});
-          fs.writeFileSync("output/result.json",response.text);
+              model="gemini-2.5-flash",
 
-          console.log(response.text);
+              contents=[
+                  audio,
+                  prompt
+              ],
 
-          EOF
+              config=types.GenerateContentConfig(
+                  response_mime_type="application/json"
+              )
 
-      - uses: actions/upload-artifact@v4
+          )
+
+          data = json.loads(response.text)
+
+          os.makedirs("release", exist_ok=True)
+
+          with open(
+              "release/analysis.json",
+              "w",
+              encoding="utf8"
+          ) as f:
+
+              json.dump(
+                  data,
+                  f,
+                  indent=2,
+                  ensure_ascii=False
+              )
+
+          print()
+          print("="*70)
+          print("SUMMARY")
+          print("="*70)
+          print(data["summary"])
+          print()
+
+          print("="*70)
+          print("SEGMENTS")
+          print("="*70)
+
+          for i, seg in enumerate(data["segments"],1):
+
+              print()
+
+              print(f"Segment {i}")
+
+              print(f"{seg['start']} → {seg['end']}")
+
+              print()
+
+              print("Narration")
+
+              print(
+                  textwrap.fill(
+                      seg["text"],
+                      width=80
+                  )
+              )
+
+              print()
+
+              print("Image Prompt")
+
+              print(
+                  textwrap.fill(
+                      seg["image_prompt"],
+                      width=80
+                  )
+              )
+
+              print("-"*70)
+
+          print()
+
+          print("analysis.json saved")
+
+          PYEOF
+
+
+      - name: Generate Markdown Report
+        run: |
+
+          python3 << 'PYEOF'
+
+          import json
+
+          with open(
+              "release/analysis.json",
+              encoding="utf8"
+          ) as f:
+
+              data=json.load(f)
+
+          md=[]
+
+          md.append("# Audio Analysis\n")
+
+          md.append("## Summary\n")
+
+          md.append(data["summary"])
+
+          md.append("\n---\n")
+
+          md.append("|Start|End|Narration|Image Prompt|")
+
+          md.append("|---|---|---|---|")
+
+          for s in data["segments"]:
+
+              text=s["text"].replace("|"," ")
+
+              prompt=s["image_prompt"].replace("|"," ")
+
+              md.append(
+                  f"|{s['start']}|{s['end']}|{text}|{prompt}|"
+              )
+
+          md.append("\n---\n")
+
+          md.append("## JSON\n")
+
+          md.append("```json")
+
+          md.append(
+              json.dumps(
+                  data,
+                  indent=2,
+                  ensure_ascii=False
+              )
+          )
+
+          md.append("```")
+
+          with open(
+              "release/analysis.md",
+              "w",
+              encoding="utf8"
+          ) as f:
+
+              f.write("\n".join(md))
+
+          print("analysis.md created")
+
+          PYEOF
+
+          
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: audio-analysis
-          path: output/result.json
+          tag_name: audio-${{ github.run_number }}
+          name: Audio Analysis ${{ github.run_number }}
+
+          generate_release_notes: true
+
+          files: |
+            output/audio.wav
+            release/analysis.json
+            release/analysis.md
+
+        env:
+
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
