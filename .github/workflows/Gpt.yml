@@ -1,0 +1,113 @@
+name: Gemini Audio Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      audio:
+        description: "Audio file path"
+        required: true
+        default: "audio.mp3"
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install @google/genai
+
+      - name: Analyze Audio
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AUDIO_FILE: ${{ github.event.inputs.audio }}
+        run: |
+          node <<'EOF'
+
+          import { GoogleGenAI } from "@google/genai";
+          import fs from "fs";
+
+          const ai = new GoogleGenAI({
+            apiKey: process.env.GEMINI_API_KEY
+          });
+
+          const file = await ai.files.upload({
+            file: process.env.AUDIO_FILE,
+            config: {
+              mimeType: "audio/mpeg"
+            }
+          });
+
+          const prompt = `
+          You are an expert video storyboard creator.
+          
+          Analyze this audio.
+          
+          Return ONLY JSON.
+          
+          Schema:
+          
+          {
+            "summary":"",
+            "segments":[
+              {
+                "start":"00:00",
+                "end":"00:05",
+                "text":"",
+                "image_prompt":"",
+                "camera":"",
+                "emotion":"",
+                "keywords":[]
+              }
+            ]
+          }
+          
+          Rules:
+          
+          - Split every 3-8 seconds.
+          - Timestamp must match narration.
+          - "text" = spoken narration.
+          - "image_prompt" = cinematic AI image prompt.
+          - Camera angle included.
+          - No markdown.
+          - JSON only.
+          `;
+
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    fileData: {
+                      fileUri: file.uri,
+                      mimeType: file.mimeType
+                    }
+                  },
+                  {
+                    text: prompt
+                  }
+                ]
+              }
+            ],
+            config: {
+              responseMimeType: "application/json"
+            }
+          });
+
+          fs.mkdirSync("output",{recursive:true});
+          fs.writeFileSync("output/result.json",response.text);
+
+          console.log(response.text);
+
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audio-analysis
+          path: output/result.json
