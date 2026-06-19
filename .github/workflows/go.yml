@@ -62,7 +62,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          python scripts/analyze_audio.py \
+          python scripts/analyze-audio.py \
             --input "${{ steps.vars.outputs.audio_path }}" \
             --output "output/scenes.json" \
             --reasoning "${{ github.event.inputs.enable_reasoning || 'true' }}" \
