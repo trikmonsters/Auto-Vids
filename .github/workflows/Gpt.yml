@@ -400,87 +400,296 @@ jobs:
           PYEOF
 
 
-      - name: Generate Markdown Report
+            - name: Generate Storyboard Images
+
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
         run: |
 
           python3 << 'PYEOF'
 
           import json
+          import os
+          import time
+          import textwrap
+
+          from google import genai
+          from google.genai import types
+
+          client = genai.Client(
+              api_key=os.environ["GEMINI_API_KEY"]
+          )
 
           with open(
               "release/analysis.json",
               encoding="utf8"
           ) as f:
 
-              data=json.load(f)
+              analysis = json.load(f)
 
-          md=[]
+          segments = analysis["segments"]
 
-          md.append("# Audio Analysis\n")
+          os.makedirs("release/images", exist_ok=True)
 
-          md.append("## Summary\n")
+          SYSTEM_PROMPT = """
+          You are the Lead Visual Development Artist of an award-winning animated feature film.
+          
+          MISSION
+          
+          Create ONE storyboard illustration from the given narration.
+          
+          GLOBAL STYLE
+          
+          Premium 2D Animation
+          
+          Hand-painted digital illustration
+          
+          Modern animated movie
+          
+          Beautiful cinematic composition
+          
+          Painterly rendering
+          
+          Soft brush texture
+          
+          Anime inspired color harmony
+          
+          Disney emotional storytelling
+          
+          Pixar quality composition
+          
+          DreamWorks staging
+          
+          Highly expressive characters
+          
+          Beautiful facial expression
+          
+          Dynamic camera
+          
+          Strong storytelling
+          
+          Detailed environment
+          
+          Rich atmosphere
+          
+          Volumetric lighting
+          
+          Global illumination
+          
+          Soft rim light
+          
+          Depth of field
+          
+          Beautiful perspective
+          
+          Consistent character design
+          
+          Consistent costume
+          
+          Consistent color palette
+          
+          Consistent background style
+          
+          Consistent world building
+          
+          Vertical 9:16
+          
+          No watermark
+          
+          No logo
+          
+          No caption
+          
+          No subtitle
+          
+          No text
+          
+          No speech bubble
+          
+          Only ONE illustration
+          
+          The illustration must faithfully depict the narration.
+          
+          Always prioritize storytelling over decoration.
+          """
 
-          md.append(data["summary"])
+          print()
+          print("="*70)
+          print("IMAGE GENERATION")
+          print("="*70)
 
-          md.append("\n---\n")
+          for idx, seg in enumerate(segments, start=1):
 
-          md.append("|Start|End|Narration|Image Prompt|")
-
-          md.append("|---|---|---|---|")
-
-          for s in data["segments"]:
-
-              text=s["text"].replace("|"," ")
-
-              prompt=s["image_prompt"].replace("|"," ")
-
-              md.append(
-                  f"|{s['start']}|{s['end']}|{text}|{prompt}|"
+              print()
+              print("-"*70)
+              print(
+                  f"Segment {idx}/{len(segments)}"
               )
 
-          md.append("\n---\n")
-
-          md.append("## JSON\n")
-
-          md.append("```json")
-
-          md.append(
-              json.dumps(
-                  data,
-                  indent=2,
-                  ensure_ascii=False
+              print(
+                  f"{seg['start']} -> {seg['end']}"
               )
-          )
 
-          md.append("```")
+              prompt = f"""
+              SCENE DESCRIPTION
+              
+              {seg.get('scene_description','')}
+              
+              CHARACTER
+              
+              {seg.get('character_description','')}
+              
+              NARRATION
+              
+              {seg['text']}
+              
+              EMOTION
+              
+              {seg.get('emotion','')}
+              
+              CAMERA
+              
+              {seg.get('camera','')}
+              
+              LIGHTING
+              
+              {seg.get('lighting','')}
+              
+              COLOR PALETTE
+              
+              {seg.get('color_palette','')}
+              
+              VISUAL PROMPT
+              
+              {seg['image_prompt']}
+              
+              CONTINUITY NOTES
+              
+              {seg.get('continuity_notes','')}
+              
+              Generate ONE premium storyboard frame.
+              
+              Keep continuity with previous scenes.
+            
+              Maintain identical character appearance.
+              
+              High quality 2D animated movie.
+              
+              """
 
-          with open(
-              "release/analysis.md",
-              "w",
-              encoding="utf8"
-          ) as f:
+              print()
+              print("Prompt Preview")
+              print()
 
-              f.write("\n".join(md))
+              print(
+                  textwrap.shorten(
+                      seg["image_prompt"],
+                      width=120
+                  )
+              )
 
-          print("analysis.md created")
+              success=False
+
+              for retry in range(4):
+                  try:
+
+                      response = client.models.generate_content(
+                          model="gemini-2.5-flash-image",
+                          contents=prompt,
+                          config=types.GenerateContentConfig(
+                              system_instruction=SYSTEM_PROMPT,
+                              response_modalities=[
+                                  "TEXT",
+                                  "IMAGE"
+                              ],
+                              image_config=types.ImageConfig(
+                                  aspect_ratio="9:16",
+                                  image_size="1K"
+                              )
+                          )
+                      )
+
+                      saved=False
+
+                      for part in response.candidates[0].content.parts:
+
+                          if getattr(part, "inline_data", None):
+
+                              out=f"release/images/{idx:03d}.png"
+
+                              with open(out,"wb") as img:
+
+                                  img.write(
+                                      part.inline_data.data
+                                  )
+
+                              print()
+                              print(f"✓ Saved {out}")
+
+                              saved=True
+
+                              success=True
+
+                              break
+
+                      if saved:
+                          break
+
+                      raise RuntimeError(
+                          "No image returned."
+                      )
+
+                  except Exception as e:
+
+                      wait=2**retry
+
+                      print(
+                          f"Retry {retry+1}: {e}"
+                      )
+
+                      time.sleep(wait)
+
+              if not success:
+
+                  raise RuntimeError(
+                      f"Failed segment {idx}"
+                  )
+
+          print()
+          print("="*70)
+          print("ALL IMAGES GENERATED")
+          print("="*70)
 
           PYEOF
 
-          
+      - name: Compress Images
+        run: |
+          cd release
+          zip -r images.zip images
 
-      - name: Create GitHub Release
+          ls -lh
+
+          echo
+          echo "Release files"
+          echo "-------------"
+
+          ls -lh .
+
+
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: audio-${{ github.run_number }}
-          name: Audio Analysis ${{ github.run_number }}
-
+          tag_name: run-${{ github.run_number }}
+          name: Storyboard ${{ github.run_number }}
+          draft: false
+          prerelease: false
           generate_release_notes: true
-
+          preserve_order: true
           files: |
             output/audio.wav
             release/analysis.json
-            release/analysis.md
+            release/images.zip
 
         env:
-
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
