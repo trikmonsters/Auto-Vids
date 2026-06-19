@@ -157,43 +157,26 @@ jobs:
           """
 
           for i,p in enumerate(paragraphs):
-
+          
               print("-"*70)
-
               print(f"Paragraph {i+1}/{len(paragraphs)}")
-
               print(textwrap.shorten(p,80))
-
               for retry in range(4):
 
                   try:
-
                       r=client.models.generate_content(
-
                           model="gemini-3.1-flash-tts-preview",
-
                           contents=prompt(p,i,len(paragraphs)),
-
                           config=types.GenerateContentConfig(
-
                               response_modalities=["AUDIO"],
-
                               speech_config=types.SpeechConfig(
-
                                   voice_config=types.VoiceConfig(
-
                                       prebuilt_voice_config=types.PrebuiltVoiceConfig(
-
                                           voice_name=VOICE
-
                                       )
-
                                   )
-
                               )
-
                           )
-
                       )
 
                       audio=r.candidates[0].content.parts[0].inline_data.data
@@ -400,13 +383,11 @@ jobs:
           PYEOF
 
 
-            - name: Generate Storyboard Images
-
+      - name: Generate Storyboard Images
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
         run: |
-
           python3 << 'PYEOF'
 
           import json
