@@ -240,7 +240,7 @@ jobs:
           print(f"Duration : {duration:.1f} seconds\n")
           PYEOF
 
-      - name: Analyze Audio
+      - name: Analyze Audio (Chunked Process)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -254,10 +254,10 @@ jobs:
           client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
           print("\n" + "="*70)
-          print(" AUDIO ANALYSIS (SUPERIOR OPTIMIZED) ")
+          print(" AUDIO ANALYSIS (CHUNKED OMIT LIMIT MODE) ")
           print("="*70 + "\n")
 
-          print("Uploading audio...")
+          print("Uploading full audio...")
           audio = client.files.upload(file="output/audio.wav")
           print("✓ Upload completed")
           print(f"{audio.uri}\n")
@@ -281,69 +281,98 @@ jobs:
           Strictly output ONLY valid JSON matching the exact schema provided. No markdown wrappers.
           """
 
-          prompt = """
-          Analyze this narration audio. Break down the timeline into high-impact sequential segments (every 3 to 8 seconds) with precise timestamps.
+          # Petunjuk schema prompt untuk Gemini
+          base_prompt_template = """
+          Analyze the specified part of this narration audio. Break down the timeline into high-impact sequential segments (every 3 to 8 seconds) with precise timestamps.
+
+          CRITICAL FOCUS: You must ONLY analyze the part of the audio that matches this text section:
+          \"\"\"{text_chunk}\"\"\"
 
           Your output must strictly follow this JSON structure:
-          {
-            "summary": "Overarching theme analysis.",
+          {{
+            "summary": "Brief theme analysis for this section.",
             "segments": [
-              {
-                "start": "00:00",
-                "end": "00:05",
+              {{
+                "start": "MM:SS",
+                "end": "MM:SS",
                 "duration": 5,
-                "text": "Spoken text.",
+                "text": "Spoken text matching the audio timestamp.",
                 "subtitle": "Clean subtitle.",
                 "image_prompt": "2D modern flat vector illustration. Top text header: '[DYNAMIC HEADERTEXT]'. [Subject description, pose, specific clothing colors]. [Surreal psychological metaphor action]. Background: minimalist light-gray line art outline of [setting description] on a white background. Aesthetic: thin outlines, soft muted colors, geometric shapes, friendly corporate illustration style.",
                 "camera_movement": "Choose one: zoom_in_slow / zoom_out_slow / pan_left / pan_right / pan_up / pan_down / static",
                 "transition_effect": "Choose one: fade / crossfade / wipe_left / wipe_right / slide_up / zoom_blur / none",
                 "transition_duration": 0.5,
-                "emotion": "Subconscious emotion.",
-              }
+                "emotion": "Subconscious emotion."
+              }}
             ]
-          }
-
+          }}
           Note: Keep the image_prompt dense, vivid, and beautifully compressed under 1,200 characters to ensure full compatibility with freegen.app.
           """
 
-          response = client.models.generate_content(
+          with open("tts-script.txt", "r", encoding="utf8") as f:
+              raw_script = f.read().strip()
+          
+          single_paragraphs = [p.strip() for p in raw_script.split("\n\n") if p.strip()]
+          half = len(single_paragraphs) // 2
+          
+          chunk1_text = "\n\n".join(single_paragraphs[:half])
+          chunk2_text = "\n\n".join(single_paragraphs[half:])
+
+          combined_segments = []
+          summary_parts = []
+          
+          print("Analyzing Audio Part 1/2...")
+          prompt1 = base_prompt_template.format(text_chunk=chunk1_text)
+          response1 = client.models.generate_content(
               model="gemini-3.5-flash",
-              contents=[audio, prompt],
+              contents=[audio, prompt1],
               config=types.GenerateContentConfig(
                   system_instruction=system_instruction,
                   response_mime_type="application/json"
               )
           )
-
           try:
-              data = json.loads(response.text)
+              data1 = json.loads(response1.text)
+              combined_segments.extend(data1.get("segments", []))
+              summary_parts.append(data1.get("summary", ""))
+              print(f"✓ Part 1 analyzed successfully ({len(data1.get('segments', []))} segments)")
           except Exception as e:
-              print(f"Failed to parse JSON response. Raw output:\n{response.text}")
+              print(f"Failed to parse Part 1 JSON. Raw output:\n{response1.text}")
               raise e
-              
+
+  
+          print("\nAnalyzing Audio Part 2/2...")
+          prompt2 = base_prompt_template.format(text_chunk=chunk2_text)
+          response2 = client.models.generate_content(
+              model="gemini-3.5-flash",
+              contents=[audio, prompt2],
+              config=types.GenerateContentConfig(
+                  system_instruction=system_instruction,
+                  response_mime_type="application/json"
+              )
+          )
+          try:
+              data2 = json.loads(response2.text)
+              combined_segments.extend(data2.get("segments", []))
+              summary_parts.append(data2.get("summary", ""))
+              print(f"✓ Part 2 analyzed successfully ({len(data2.get('segments', []))} segments)")
+          except Exception as e:
+              print(f"Failed to parse Part 2 JSON. Raw output:\n{response2.text}")
+              raise e
+
+
+          final_analysis = {
+              "summary": " | ".join(summary_parts),
+              "segments": combined_segments
+          }
+
           os.makedirs("release", exist_ok=True)
           with open("release/analysis.json", "w", encoding="utf8") as f:
-              json.dump(data, f, indent=2, ensure_ascii=False)
+              json.dump(final_analysis, f, indent=2, ensure_ascii=False)
 
+          print("\n" + "="*70)
+          print(f"SUCCESS: Combined analysis.json saved with {len(combined_segments)} total segments!")
           print("="*70)
-          print("SUMMARY")
-          print("="*70)
-          print(data["summary"] + "\n")
-
-          print("="*70)
-          print("SEGMENTS")
-          print("="*70)
-          
-          for i, seg in enumerate(data["segments"], 1):
-              print(f"\nSegment {i}")
-              print(f"{seg['start']} → {seg['end']}\n")
-              print("Narration:")
-              print(textwrap.fill(seg["text"], width=80) + "\n")
-              print("Image Prompt:")
-              print(textwrap.fill(seg["image_prompt"], width=80))
-              print("-"*70)
-          
-          print("\nanalysis.json saved successfully!")
           PYEOF
 
       - name: Generate Images (Parallel)
@@ -356,7 +385,7 @@ jobs:
               fs.readFileSync("release/analysis.json", "utf8")
           );
           const segments = analysis.segments;
-          const MAX_WORKERS = 4;
+          const MAX_WORKERS = 5;
 
           fs.mkdirSync("release/images", { recursive: true });
 
@@ -370,7 +399,7 @@ jobs:
                           waitUntil: "domcontentloaded"
                       });
                       
-                      await page.selectOption("#aspectRatioSelect", "9:16");
+                      await page.selectOption("#aspectRatioSelect", "16:9");
                       await page.fill("#prompt", segment.image_prompt);
                       await page.keyboard.press("Enter");
                       
