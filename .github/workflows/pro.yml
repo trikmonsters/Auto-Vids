@@ -1,0 +1,455 @@
+name: Project Video AI
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Masukkan Judul atau Topik Narasi (Psychology)"
+        required: true
+        type: string
+      voice:
+        description: "Gemini Voice"
+        required: false
+        default: "Sulafat"
+      language:
+        description: "Language"
+        required: false
+        default: "id-ID"
+      paragraph_gap:
+        description: "Gap antar paragraf (detik)"
+        required: false
+        default: "1"
+
+permissions:
+  contents: write
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TOPIC_INPUT: ${{ github.event.inputs.topic }}
+      VOICE_NAME: ${{ github.event.inputs.voice }}
+      LANGUAGE: ${{ github.event.inputs.language }}
+      PARA_GAP: ${{ github.event.inputs.paragraph_gap }}
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-genai
+
+      - name: Setup Node.js and Install Dependencies
+        run: |
+          npm init -y
+          npm install @google/genai playwright
+          npx playwright install chromium
+
+      - name: Prepare Workspace
+        run: |
+          mkdir -p output release
+
+      - name: Generate Psychological Narrative from Topic
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { GoogleGenAI } = require('@google/genai');
+            const fs = require('fs');
+            
+            const ai = new GoogleGenAI();
+            
+            const systemPrompt = `You are an elite, avant-garde psychological storyteller and narrative designer. Your goal is to write long-form, deeply creative, and highly immersive narratives based on a given topic. 
+
+            CRITICAL MANDATE: You must completely avoid clichés, predictable tropes, and generic AI writing structures (e.g., introducing a character named "Leo who always wondered...", or starting with "In a world where..."). Every story concept must be an entirely fresh, original psychological perspective that has never been used before.
+
+            Follow these strict structural guidelines for every output:
+            1. Tone & Style: Atmospheric, intellectually stimulating, deeply psychological, and cinematic. Use vivid imagery and unconventional metaphors.
+            2. Narrative Length: Write an extended, multi-paragraph narrative (minimum 800-1200 words) that explores the psychological depth of the topic. Do not rush the ending.
+            3. Psychological Core: Focus on internal conflict, cognitive biases, the subconscious, altered states of mind, or the complexity of human behavior.
+            4. Output Language: Perfect, sophisticated English.
+
+            Formatting Structure for Output:
+            Setiap paragraf harus dipisahkan oleh dua baris baru (double newline) agar skrip TTS mengenalnya sebagai paragraf terpisah.`;
+
+            const userPrompt = `Act as the System Prompt instructed. Generate a brand-new, deeply psychological, and highly creative long-form narrative.\n\nTopic/Title: ${process.env.TOPIC_INPUT}\n\nEnsure the plot twist or core psychological angle is entirely unpredictable and uniquely conceptualized. Write it in English.`;
+
+            async function run() {
+              try {
+                console.log(`Generating narrative for topic: ${process.env.TOPIC_INPUT}`);
+                const response = await ai.models.generateContent({
+                  model: 'gemini-3.5-flash', 
+                  contents: userPrompt,
+                  config: {
+                    systemInstruction: systemPrompt,
+                    temperature: 1.0, 
+                  }
+                });
+
+                const storyText = response.text;
+                
+                fs.writeFileSync('tts-script.txt', storyText);
+                
+                console.log("=========================================");
+                console.log("Narrative Successfully Generated!");
+                console.log("=========================================");
+              } catch (error) {
+                core.setFailed(`Gemini Narrative Error: ${error.message}`);
+              }
+            }
+
+            run();
+
+      - name: Check Script Analytics
+        run: |
+          echo "========================================="
+          echo "Generated Characters : $(wc -m < tts-script.txt)"
+          echo "Generated Words      : $(wc -w < tts-script.txt)"
+          echo "========================================="
+
+
+      - name: Generate TTS Audio
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 << 'PYEOF'
+          import os
+          import wave
+          import struct
+          import time
+          import textwrap
+          from google import genai
+          from google.genai import types
+
+          API_KEY = os.environ["GEMINI_API_KEY"]
+          VOICE = os.environ["VOICE_NAME"]
+          LANGUAGE = os.environ["LANGUAGE"]
+          GAP = float(os.environ["PARA_GAP"])
+          SAMPLE_RATE = 24000
+          CHANNELS = 1
+          SAMPLE_WIDTH = 2
+
+          print("\n" + "="*70)
+          print(" GEMINI TTS - RATE LIMIT BYPASS MODE ")
+          print("="*70)
+
+          with open("tts-script.txt", "r", encoding="utf8") as f:
+              raw = f.read().strip()
+          
+          single_paragraphs = [p.strip() for p in raw.split("\n\n") if p.strip()]
+          
+          if not single_paragraphs:
+              print("Error: No paragraphs found!")
+              exit(1)
+
+          paragraphs = []
+          for i in range(0, len(single_paragraphs), 2):
+              chunk = single_paragraphs[i:i+2]
+              paragraphs.append("\n\n".join(chunk))
+          
+          print(f"Voice            : {VOICE}")
+          print(f"Language         : {LANGUAGE}")
+          print(f"Total Batches    : {len(paragraphs)}")
+          print("Rate Limit Safe  : Active (Max 3 requests per minute)\n")
+
+          client = genai.Client(api_key=API_KEY)
+
+          def silence(sec):
+              n = int(SAMPLE_RATE * sec)
+              return struct.pack(f"<{n}h", *([0] * n))
+
+          def build_prompt(text, index, total):
+              if index == 0:
+                  style = "Speak warmly and slowly."
+              elif index == total - 1:
+                  style = "Speak gently and emotionally."
+              else:
+                  style = "Speak naturally like a professional narrator."
+              return f"Language: {LANGUAGE}\n\n{style}\n\n{textwrap.dedent(text)}"
+
+          pcm = []
+
+          for i, p in enumerate(paragraphs):
+              print("-"*70)
+              print(f"Processing Batch {i+1}/{len(paragraphs)}")
+              print(textwrap.shorten(p.replace('\n', ' '), 80))
+              
+              success = False
+              for retry in range(4):
+                  try:
+                      response = client.models.generate_content(
+                          model="gemini-3.1-flash-tts-preview",
+                          contents=build_prompt(p, i, len(paragraphs)),
+                          config=types.GenerateContentConfig(
+                              response_modalities=["AUDIO"],
+                              speech_config=types.SpeechConfig(
+                                  voice_config=types.VoiceConfig(
+                                      prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                          voice_name=VOICE
+                                      )
+                                  )
+                              )
+                          )
+                      )
+                      
+                      if response.candidates and response.candidates[0].content.parts:
+                          audio = response.candidates[0].content.parts[0].inline_data.data
+                          pcm.append(audio)
+                          print("✓ Audio generated")
+                          success = True
+                          break
+                      else:
+                          print("No audio data received")
+                          
+                  except Exception as e:
+                      print(f"Rate limit hit or Error (attempt {retry+1}): {e}")
+                      print("Waiting longer to recover...")
+                      time.sleep(30 * (retry + 1)) # Jeda agresif jika terdeteksi limit
+              
+              if not success:
+                  print(f"Failed at batch {i+1}")
+                  exit(1)
+              
+              if i != len(paragraphs) - 1:
+                  pcm.append(silence(GAP))
+                  
+                  # TRICK ANTI LIMIT: Istirahat wajib 18 detik sebelum lanjut ke batch berikutnya
+                  # Ini menjaga total request berada di kisaran ~3 RPM (Lolos Batasan 4 RPM)
+                  print("⏳ Cooling down for 18 seconds to respect Gemini Free Tier 4-RPM Limit...")
+                  time.sleep(18)
+
+          out = "output/audio.wav"
+          with wave.open(out, "wb") as wf:
+              wf.setnchannels(CHANNELS)
+              wf.setsampwidth(SAMPLE_WIDTH)
+              wf.setframerate(SAMPLE_RATE)
+              wf.writeframes(b"".join(pcm))
+
+          duration = sum(len(x) for x in pcm) / (SAMPLE_RATE * SAMPLE_WIDTH)
+          
+          print("\n" + "="*70)
+          print("SUCCESSFULLY COMPLETED")
+          print("="*70)
+          print(f"Output   : {out}")
+          print(f"Duration : {duration:.1f} seconds\n")
+          PYEOF
+
+      - name: Analyze Audio
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 << 'PYEOF'
+          import json
+          import os
+          import textwrap
+          from google import genai
+          from google.genai import types
+
+          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+          print("\n" + "="*70)
+          print(" AUDIO ANALYSIS (SUPERIOR OPTIMIZED) ")
+          print("="*70 + "\n")
+
+          print("Uploading audio...")
+          audio = client.files.upload(file="output/audio.wav")
+          print("✓ Upload completed")
+          print(f"{audio.uri}\n")
+
+          system_instruction = """
+          You are a Master Creative Director and Video Editing Engineer specializing in elite 2D animation and dynamic cinematic sequencing. 
+          Your job is to translate psychological audio into highly cohesive visual prompts AND precise video transition directives for FFmpeg automation.
+          
+          CRITICAL LIMITATION: Every 'image_prompt' must be under 1,200 characters. 
+          
+          VIDEO EDITING MANDATE:
+          You must determine the best camera movement and transition effect for each segment to ensure the final video feels fluid, high-energy, and 'mind-blowing'.
+          - camera_movement options: 'zoom_in_slow', 'zoom_out_slow', 'pan_left', 'pan_right', 'pan_up', 'pan_down', 'static'.
+          - transition_effect options: 'fade', 'crossfade', 'wipe_left', 'wipe_right', 'slide_up', 'zoom_blur', 'none'.
+          
+          Strictly output ONLY valid JSON matching the exact schema provided. No markdown wrappers.
+          """
+
+          prompt = """
+          Analyze this narration audio. Break down the timeline into high-impact sequential segments (every 3 to 8 seconds) with precise timestamps.
+
+          Your output must strictly follow this JSON structure:
+          {
+            "summary": "Overarching theme analysis.",
+            "segments": [
+              {
+                "start": "00:00",
+                "end": "00:05",
+                "duration": 5,
+                "text": "Spoken text.",
+                "subtitle": "Clean subtitle.",
+                "image_prompt": "2D modern flat vector illustration. Top text header: '[DYNAMIC HEADERTEXT]'. [Subject description, pose, specific clothing colors]. [Surreal psychological metaphor action]. Background: minimalist light-gray line art outline of [setting description] on a white background. Aesthetic: thin outlines, soft muted colors, geometric shapes, friendly corporate illustration style.",
+                "camera_movement": "Choose one: zoom_in_slow / zoom_out_slow / pan_left / pan_right / pan_up / pan_down / static",
+                "transition_effect": "Choose one: fade / crossfade / wipe_left / wipe_right / slide_up / zoom_blur / none",
+                "transition_duration": 0.5,
+                "emotion": "Subconscious emotion.",
+              }
+            ]
+          }
+
+          Note: Ensure transition choices match the psychological intensity of the text (e.g., use 'zoom_blur' or 'wipe' during sudden thematic shifts, and 'fade' or 'zoom_in_slow' during deep, emotional reflections).
+          """
+
+          response = client.models.generate_content(
+              model="gemini-3.5-flash",
+              contents=[audio, prompt],
+              config=types.GenerateContentConfig(
+                  system_instruction=system_instruction,
+                  response_mime_type="application/json"
+              )
+          )
+
+          try:
+              data = json.loads(response.text)
+          except Exception as e:
+              print(f"Failed to parse JSON response. Raw output:\n{response.text}")
+              raise e
+              
+          os.makedirs("release", exist_ok=True)
+          with open("release/analysis.json", "w", encoding="utf8") as f:
+              json.dump(data, f, indent=2, ensure_ascii=False)
+
+          print("="*70)
+          print("SUMMARY")
+          print("="*70)
+          print(data["summary"] + "\n")
+
+          print("="*70)
+          print("SEGMENTS")
+          print("="*70)
+          
+          for i, seg in enumerate(data["segments"], 1):
+              print(f"\nSegment {i}")
+              print(f"{seg['start']} → {seg['end']}\n")
+              print("Narration:")
+              print(textwrap.fill(seg["text"], width=80) + "\n")
+              print("Image Prompt:")
+              print(textwrap.fill(seg["image_prompt"], width=80))
+              print("-"*70)
+          
+          print("\nanalysis.json saved successfully!")
+          PYEOF
+
+      - name: Generate Images (Parallel)
+        run: |
+          cat > generate-images.js <<'EOF'
+          const { chromium } = require("playwright");
+          const fs = require("fs");
+
+          const analysis = JSON.parse(
+              fs.readFileSync("release/analysis.json", "utf8")
+          );
+          const segments = analysis.segments;
+          const MAX_WORKERS = 4;
+
+          fs.mkdirSync("release/images", { recursive: true });
+
+          async function generate(page, segment, index) {
+              console.log(`\nGenerating ${index+1}/${segments.length}`);
+              console.log(`${segment.start} -> ${segment.end}`);
+              
+              for (let retry = 1; retry <= 3; retry++) {
+                  try {
+                      await page.goto("https://freegen.app/", {
+                          waitUntil: "domcontentloaded"
+                      });
+                      
+                      await page.selectOption("#aspectRatioSelect", "9:16");
+                      await page.fill("#prompt", segment.image_prompt);
+                      await page.keyboard.press("Enter");
+                      
+                      const imageContainer = page.locator("#imageContainer");
+                      await imageContainer.waitFor({ timeout: 90000 });
+                      
+                      const img = imageContainer.locator("img");
+                      const src = await img.getAttribute("src");
+                      const base64 = src.replace(/^data:image\/[a-z]+;base64,/, "");
+                      
+                      const out = `release/images/${String(index+1).padStart(3, "0")}.jpg`;
+                      fs.writeFileSync(out, base64, "base64");
+                      
+                      console.log("✓", out);
+                      return;
+                  } catch (err) {
+                      console.log(`Retry ${retry}: ${err.message}`);
+                      if (retry === 3) {
+                          fs.writeFileSync(
+                              `release/images/${String(index+1).padStart(3, "0")}.error.txt`,
+                              err.stack
+                          );
+                      }
+                  }
+              }
+          }
+
+          async function worker(id, browser, queue) {
+              const page = await browser.newPage();
+              while (true) {
+                  const index = queue.shift();
+                  if (index === undefined) break;
+                  console.log(`Worker ${id} -> ${index+1}`);
+                  await generate(page, segments[index], index);
+              }
+              await page.close();
+          }
+
+          (async () => {
+              const queue = Array.from({ length: segments.length }, (_, i) => i);
+              
+              console.log("\n==============================");
+              console.log("IMAGE GENERATOR");
+              console.log("==============================");
+              console.log(`Workers  : ${MAX_WORKERS}`);
+              console.log(`Segments : ${segments.length}`);
+              
+              const browser = await chromium.launch({ headless: true });
+              await Promise.all(
+                  Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
+                      worker(i + 1, browser, queue)
+                  )
+              );
+              await browser.close();
+              console.log("\nDONE");
+          })();
+          EOF
+          
+          node generate-images.js
+
+      - name: Create Images Archive
+        run: |
+          cd release
+          if [ -d "images" ] && [ "$(ls -A images)" ]; then
+            zip -r images.zip images/
+            echo "Images archived successfully"
+          else
+            echo "No images generated, skipping archive"
+            touch images.zip
+          fi
+          cd ..
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: run-${{ github.run_number }}
+          name: Storyboard ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          preserve_order: true
+          files: |
+            output/audio.wav
+            release/analysis.json
+            release/images.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
