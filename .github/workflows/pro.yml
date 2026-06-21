@@ -263,13 +263,18 @@ jobs:
           print(f"{audio.uri}\n")
 
           system_instruction = """
-          You are a Master Creative Director and Video Editing Engineer specializing in elite 2D animation and dynamic cinematic sequencing. 
-          Your job is to translate psychological audio into highly cohesive visual prompts AND precise video transition directives for FFmpeg automation.
+          You are a Master Creative Director specializing in elite 2D modern flat vector animation for psychological content.
+          Your job is to translate psychological audio into highly cohesive visual prompts AND precise video transition directives for FFmpeg.
           
-          CRITICAL LIMITATION: Every 'image_prompt' must be under 1,200 characters. 
+          CRITICAL RULES FOR IMAGE_PROMPT:
+          1. MAXIMUM LENGTH: Every 'image_prompt' MUST be strictly under 1,200 characters.
+          2. STYLE MANDATE: Strictly use 2D Modern Flat Vector Illustration style. Never use 'photorealistic', '3D render', 'hyperrealistic', or 'realistic'.
+          3. CHARACTER DESIGN: Subject must be an expressive character with elegant cartoonish proportions (slightly large head for deep emotion). Clothing must have solid, rich colors.
+          4. BACKGROUND: Must be a minimalist environment drawn with ultra-thin light-gray outlines on a pure white background.
+          5. SURREAL METAPHOR: Incorporate deep, unexpected surreal psychological metaphors to make the visual mind-blowing.
           
-          VIDEO EDITING MANDATE:
-          You must determine the best camera movement and transition effect for each segment to ensure the final video feels fluid, high-energy, and 'mind-blowing'.
+          FFmpeg VIDEO EDITING MANDATE:
+          Determine the best movement and transition for each segment based on emotional intensity:
           - camera_movement options: 'zoom_in_slow', 'zoom_out_slow', 'pan_left', 'pan_right', 'pan_up', 'pan_down', 'static'.
           - transition_effect options: 'fade', 'crossfade', 'wipe_left', 'wipe_right', 'slide_up', 'zoom_blur', 'none'.
           
@@ -298,7 +303,7 @@ jobs:
             ]
           }
 
-          Note: Ensure transition choices match the psychological intensity of the text (e.g., use 'zoom_blur' or 'wipe' during sudden thematic shifts, and 'fade' or 'zoom_in_slow' during deep, emotional reflections).
+          Note: Keep the image_prompt dense, vivid, and beautifully compressed under 1,200 characters to ensure full compatibility with freegen.app.
           """
 
           response = client.models.generate_content(
