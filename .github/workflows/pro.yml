@@ -263,15 +263,18 @@ jobs:
           print(f"{audio.uri}\n")
 
           system_instruction = """
-          You are a Master Creative Director specializing in elite 2D modern flat vector animation for psychological content.
-          Your job is to translate psychological audio into highly cohesive visual prompts AND precise video transition directives for FFmpeg.
+          You are an Elite Avant-Garde Creative Director and Master Cyber-Surrealist Artist specializing in world-class 2D modern flat vector illustration for deep psychological, philosophical, and high-intellect cinematic narratives. 
           
-          CRITICAL RULES FOR IMAGE_PROMPT:
-          1. MAXIMUM LENGTH: Every 'image_prompt' MUST be strictly under 1,200 characters.
-          2. STYLE MANDATE: Strictly use 2D Modern Flat Vector Illustration style. Never use 'photorealistic', '3D render', 'hyperrealistic', or 'realistic'.
-          3. CHARACTER DESIGN: Subject must be an expressive character with elegant cartoonish proportions (slightly large head for deep emotion). Clothing must have solid, rich colors.
-          4. BACKGROUND: Must be a minimalist environment drawn with ultra-thin light-gray outlines on a pure white background.
-          5. SURREAL METAPHOR: Incorporate deep, unexpected surreal psychological metaphors to make the visual mind-blowing.
+          Your job is to translate complex emotional audio into breathtaking, deeply atmospheric, and highly sophisticated visual prompt scripts AND precise video transition directives for FFmpeg.
+
+          CRITICAL QUALITY MANDATE FOR IMAGE_PROMPT:
+          - Every single 'image_prompt' MUST be an incredibly dense, ultra-detailed masterpiece, strictly between 1,500 and 2,000 characters long. Avoid generic phrasing.
+          - STYLE: Masterpiece 2D Modern Flat Vector Illustration, highly sophisticated editorial design style, clean geometric shapes, complex vector layering. NEVER use 'photorealistic', '3D render', 'hyperrealistic', 'skeuomorphic', or 'octane render'.
+          - VISUAL DEPTH: The flat vector style must look premium, complex, and cinematic. Achieve this through multi-layered backgrounds, isometric perspectives, intricate geometric patterns, and rich textures created purely from flat vector shading.
+          - CHARACTER DESIGN: The subject must be an expressive character with elegant, avant-garde cartoonish proportions (slightly enlarged head to amplify deep internal emotion, expressive eyes, stylized anatomy). Clothing must feature solid, rich, deeply saturated colors with crisp minimalist creases.
+          - BACKGROUND & ENVIRONMENT: A striking, minimalist but highly detailed environment drawn with ultra-thin, precise light-gray and muted-ink lines. The setting must feel vast, atmospheric, and architectural, incorporating clean lines, perfect symmetry, or unsettling distorted perspectives on a pure clinical white canvas.
+          - LIGHTING & COLOR PALETTE: Establish high-contrast, moody, and dramatic atmospheric lighting using flat color gradients and sharp vector shadows (chiaroscuro vector technique). Use an elite, highly curated color palette: deep midnight blues, rich terracottas, muted sages, or royal gold accents clashing against the clean white environment.
+          - SURREAL PSYCHOLOGICAL METAPHOR: This is the core focus. You must avoid literal interpretations. Incorporate profound, mind-bending, and highly unexpected surreal psychological metaphors to depict the subconscious mind. (Examples: a character's head shattering into a perfectly organized constellation of geometric glass shards, shadows stretching into infinite labyrinthine corridors, or thoughts manifesting as neon threads weaving through an architectural void).
           
           FFmpeg VIDEO EDITING MANDATE:
           Determine the best movement and transition for each segment based on emotional intensity:
@@ -281,7 +284,6 @@ jobs:
           Strictly output ONLY valid JSON matching the exact schema provided. No markdown wrappers.
           """
 
-          # Petunjuk schema prompt untuk Gemini
           base_prompt_template = """
           Analyze the specified part of this narration audio. Break down the timeline into high-impact sequential segments (every 3 to 8 seconds) with precise timestamps.
 
@@ -290,7 +292,7 @@ jobs:
 
           Your output must strictly follow this JSON structure:
           {{
-            "summary": "Brief theme analysis for this section.",
+            "summary": "Deep overarching theme analysis for this section.",
             "segments": [
               {{
                 "start": "MM:SS",
@@ -298,7 +300,7 @@ jobs:
                 "duration": 5,
                 "text": "Spoken text matching the audio timestamp.",
                 "subtitle": "Clean subtitle.",
-                "image_prompt": "2D modern flat vector illustration. Top text header: '[DYNAMIC HEADERTEXT]'. [Subject description, pose, specific clothing colors]. [Surreal psychological metaphor action]. Background: minimalist light-gray line art outline of [setting description] on a white background. Aesthetic: thin outlines, soft muted colors, geometric shapes, friendly corporate illustration style.",
+                "image_prompt": "A masterwork of 2D modern flat vector illustration, premium editorial graphic design style. Top text header dynamically reads: '[DYNAMIC HEADERTEXT]'. [Write an extremely exhaustive, detailed description of the subject, their profound psychological expression, avant-garde cartoonish proportions, specific rich clothing colors, and precise body language]. [Describe an incredibly vivid, complex, and mind-blowing surreal psychological metaphor action occurring in the scene that represents the subconscious mind in depth]. Background: a vast, meticulous, and stunning minimalist environment composed of ultra-thin light-gray architectural line art outlines, intricate geometric patterns, and layered isometric structures on a pure crisp white background. Aesthetic: high-contrast dramatic vector shadows, crisp geometric execution, highly curated color palette featuring deep muted tones, professional corporate-surrealist editorial art style. Overwhelmingly detailed, rich in visual information, cinematic composition, elite flat design.",
                 "camera_movement": "Choose one: zoom_in_slow / zoom_out_slow / pan_left / pan_right / pan_up / pan_down / static",
                 "transition_effect": "Choose one: fade / crossfade / wipe_left / wipe_right / slide_up / zoom_blur / none",
                 "transition_duration": 0.5,
@@ -306,7 +308,7 @@ jobs:
               }}
             ]
           }}
-          Note: Keep the image_prompt dense, vivid, and beautifully compressed under 1,200 characters to ensure full compatibility with freegen.app.
+          Note: Ensure the image_prompt is densely packed, complex, and meticulously detailed, staying strictly within the 1,500 to 2,000 character limit to maximize freegen.app generation quality.
           """
 
           with open("tts-script.txt", "r", encoding="utf8") as f:
