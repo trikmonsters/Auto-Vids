@@ -41,11 +41,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install google-genai
-          npm install
+
+      - name: Setup Node.js and Install Dependencies
+        run: |
+          # Initialize npm project
+          npm init -y
+          
+          # Install required packages
           npm install playwright
           npx playwright install chromium
 
@@ -91,6 +97,10 @@ jobs:
           
           paragraphs = [p.strip() for p in raw.split("\n\n") if p.strip()]
           
+          if not paragraphs:
+              print("Error: No paragraphs found!")
+              exit(1)
+          
           print(f"Voice      : {VOICE}")
           print(f"Language   : {LANGUAGE}")
           print(f"Paragraphs : {len(paragraphs)}\n")
@@ -118,6 +128,7 @@ jobs:
               print(f"Paragraph {i+1}/{len(paragraphs)}")
               print(textwrap.shorten(p, 80))
               
+              success = False
               for retry in range(4):
                   try:
                       response = client.models.generate_content(
@@ -135,13 +146,22 @@ jobs:
                           )
                       )
                       
-                      audio = response.candidates[0].content.parts[0].inline_data.data
-                      pcm.append(audio)
-                      print("✓ generated")
-                      break
+                      if response.candidates and response.candidates[0].content.parts:
+                          audio = response.candidates[0].content.parts[0].inline_data.data
+                          pcm.append(audio)
+                          print("✓ generated")
+                          success = True
+                          break
+                      else:
+                          print("No audio data received")
+                          
                   except Exception as e:
-                      print(f"Error: {e}")
+                      print(f"Error (attempt {retry+1}): {e}")
                       time.sleep(2 ** retry)
+              
+              if not success:
+                  print(f"Failed to generate paragraph {i+1}")
+                  exit(1)
               
               if i != len(paragraphs) - 1:
                   pcm.append(silence(GAP))
@@ -310,7 +330,7 @@ jobs:
               }
           }
 
-          async function worker(id, browser) {
+          async function worker(id, browser, queue) {
               const page = await browser.newPage();
               while (true) {
                   const index = queue.shift();
@@ -321,9 +341,9 @@ jobs:
               await page.close();
           }
 
-          const queue = Array.from({ length: segments.length }, (_, i) => i);
-
           (async () => {
+              const queue = Array.from({ length: segments.length }, (_, i) => i);
+              
               console.log("\n==============================");
               console.log("IMAGE GENERATOR");
               console.log("==============================");
@@ -332,8 +352,8 @@ jobs:
               
               const browser = await chromium.launch({ headless: true });
               await Promise.all(
-                  Array.from({ length: MAX_WORKERS }, (_, i) =>
-                      worker(i + 1, browser)
+                  Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
+                      worker(i + 1, browser, queue)
                   )
               );
               await browser.close();
@@ -346,7 +366,13 @@ jobs:
       - name: Create Images Archive
         run: |
           cd release
-          zip -r images.zip images/
+          if [ -d "images" ] && [ "$(ls -A images)" ]; then
+            zip -r images.zip images/
+            echo "Images archived successfully"
+          else
+            echo "No images generated, skipping archive"
+            touch images.zip
+          fi
           cd ..
 
       - name: Publish Release
