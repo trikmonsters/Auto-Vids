@@ -219,10 +219,8 @@ jobs:
               if i != len(paragraphs) - 1:
                   pcm.append(silence(GAP))
                   
-                  # TRICK ANTI LIMIT: Istirahat wajib 18 detik sebelum lanjut ke batch berikutnya
-                  # Ini menjaga total request berada di kisaran ~3 RPM (Lolos Batasan 4 RPM)
                   print("⏳ Cooling down for 18 seconds to respect Gemini Free Tier 4-RPM Limit...")
-                  time.sleep(18)
+                  time.sleep(21)
 
           out = "output/audio.wav"
           with wave.open(out, "wb") as wf:
