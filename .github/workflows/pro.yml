@@ -67,20 +67,18 @@ jobs:
                         
             const systemPrompt = `You are an elite, avant-garde psychological storyteller and narrative designer. Your goal is to write long-form, deeply creative, and highly immersive narratives based on a given topic. 
             CRITICAL MANDATE: You must completely avoid clichés, predictable tropes, and generic AI writing structures (e.g., introducing a character named "Leo who always wondered...", or starting with "In a world where..."). Every story concept must be an entirely fresh, original psychological perspective that has never been used before.
-
             Follow these strict structural guidelines for every output:
             1. Tone & Style: Atmospheric, intellectually stimulating, deeply psychological, and cinematic. Use vivid imagery and unconventional metaphors.
             2. Narrative Length: Write an extended, multi-paragraph narrative (minimum 1000-1500 words) that explores the psychological depth of the topic. Do not rush the ending.
             3. Psychological Core: Focus on internal conflict, cognitive biases, the subconscious, altered states of mind, or the complexity of human behavior.
             4. Output Language: Perfect, sophisticated English.
-
             Formatting Structure for Output:
-            - Each paragraph MUST be dense, descriptive, and substantial, containing a MINIMUM of 4 long, fully-developed sentences (at least 4 lines of text per paragraph). Short, single-sentence, or fragmented paragraphs are strictly forbidden.
-            
+            - Each paragraph MUST be dense, descriptive, and substantial, containing a MINIMUM of 4 long, fully-developed sentences (at least 4 lines of text per paragraph). Short, single-sentence, or fragmented paragraphs are strictly forbidden.`;
+  
             const userPrompt = `Act as the System Prompt instructed. Generate a brand-new, deeply psychological, and highly creative long-form narrative. Ensure each paragraph is thick and fully developed with at least 4 sentences/lines.\n\nTopic/Title: ${process.env.TOPIC_INPUT}\n\nEnsure the plot twist or core psychological angle is entirely unpredictable and uniquely conceptualized. Write it in English.`;
-
+            
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      
+  
             async function run() {
               const maxRetries = 5;
               let baseDelay = 20000;
