@@ -460,7 +460,7 @@ jobs:
           
           node generate-images.js
 
-      - name: Compile Final Video (FFmpeg Automation)
+      - name: Compile Final Video (FFmpeg 16:9 Widescreen Automation)
         run: |
           python3 << 'PYEOF'
           import json, os, subprocess
@@ -476,7 +476,8 @@ jobs:
           
           with open("release/inputs.txt", "w", encoding="utf8") as f:
               for i, seg in enumerate(segments):
-                  idx_str = str(i+1).padStart(3, "0")
+                  # PERBAIKAN: Menggunakan .zfill(3) khas Python, bukan .padStart()
+                  idx_str = str(i+1).zfill(3)
                   img_path = f"release/images/{idx_str}.jpg"
                   duration = float(seg.get("duration", 5.0))
                   
@@ -487,6 +488,7 @@ jobs:
                   segment_video = f"release/seg_{idx_str}.mp4"
                   movement = seg.get("camera_movement", "static")
                   
+                  # SETTING RESOLUSI LANSKAP (1920x1080) & SKALA INPUT ZOOMPAN
                   if "zoom_in" in movement:
                       vf_effects = "scale=2560:1440,zoompan=z='min(zoom+0.0015,1.3)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080"
                   elif "zoom_out" in movement:
@@ -496,7 +498,7 @@ jobs:
                   elif "pan_left" in movement:
                       vf_effects = "scale=2560:1080,zoompan=z=1.2:x='(1-0.002*in)*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':s=1920x1080"
                   else:
-                      vf_effects = "scale=1920:1080" # Lanskap Statis Tetap Tajam
+                      vf_effects = "scale=1920:1080"
                   
                   print(f"Memproses segmen 16:9 {idx_str} -> Durasi: {duration} s, Efek Kamera: {movement}")
                   
@@ -527,6 +529,7 @@ jobs:
           print("="*70)
           PYEOF
 
+          
       - name: Create Artifacts Images
         run: |
           cd release
