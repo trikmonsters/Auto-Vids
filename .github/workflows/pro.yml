@@ -62,48 +62,104 @@ jobs:
           script: |
             const { GoogleGenAI } = require('@google/genai');
             const fs = require('fs');
-            
+            const core = require('@actions/core');
+      
             const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-            
+                        
             const systemPrompt = `You are an elite, avant-garde psychological storyteller and narrative designer. Your goal is to write long-form, deeply creative, and highly immersive narratives based on a given topic. 
-
             CRITICAL MANDATE: You must completely avoid clichés, predictable tropes, and generic AI writing structures (e.g., introducing a character named "Leo who always wondered...", or starting with "In a world where..."). Every story concept must be an entirely fresh, original psychological perspective that has never been used before.
-
             Follow these strict structural guidelines for every output:
             1. Tone & Style: Atmospheric, intellectually stimulating, deeply psychological, and cinematic. Use vivid imagery and unconventional metaphors.
             2. Narrative Length: Write an extended, multi-paragraph narrative (minimum 800-1200 words) that explores the psychological depth of the topic. Do not rush the ending.
             3. Psychological Core: Focus on internal conflict, cognitive biases, the subconscious, altered states of mind, or the complexity of human behavior.
             4. Output Language: Perfect, sophisticated English.
-
             Formatting Structure for Output:
             Setiap paragraf harus dipisahkan oleh dua baris baru (double newline) agar skrip TTS mengenalnya sebagai paragraf terpisah.`;
-
+      
             const userPrompt = `Act as the System Prompt instructed. Generate a brand-new, deeply psychological, and highly creative long-form narrative.\n\nTopic/Title: ${process.env.TOPIC_INPUT}\n\nEnsure the plot twist or core psychological angle is entirely unpredictable and uniquely conceptualized. Write it in English.`;
-
+      
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      
             async function run() {
-              try {
-                console.log(`Generating narrative for topic: ${process.env.TOPIC_INPUT}`);
-                const response = await ai.models.generateContent({
-                  model: 'gemini-3.5-flash', 
-                  contents: userPrompt,
-                  config: {
-                    systemInstruction: systemPrompt,
-                    temperature: 1.0, 
+              const maxRetries = 5;
+              let baseDelay = 20000; // DIUBAH: Jeda awal minimal 20 detik
+              let currentModel = 'gemini-3.5-flash';
+              let success = false;
+              let lastError = null;
+      
+              console.log(`Starting narrative generation for topic: ${process.env.TOPIC_INPUT}`);
+      
+              // Loop utama 5x percobaan untuk gemini-3.5-flash
+              for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                  console.log(`[Attempt ${attempt}/${maxRetries}] Using model: ${currentModel}...`);
+                  
+                  const response = await ai.models.generateContent({
+                    model: currentModel, 
+                    contents: userPrompt,
+                    config: {
+                      systemInstruction: systemPrompt,
+                      temperature: 1.0, 
+                    }
+                  });
+      
+                  const storyText = response.text;
+                  fs.writeFileSync('tts-script.txt', storyText);
+                  
+                  console.log("=========================================");
+                  console.log(`Narrative Successfully Generated using ${currentModel}!`);
+                  console.log("=========================================");
+                  
+                  success = true;
+                  break;
+      
+                } catch (error) {
+                  lastError = error;
+                  console.warn(`[Attempt ${attempt}] Failed. Error: ${error.message}`);
+                  
+                  if (attempt < maxRetries) {
+                    // Menghitung jeda baru dengan basis 20 detik
+                    let currentDelay = baseDelay * Math.pow(2, attempt - 1);
+                    console.log(`Waiting ${currentDelay / 1000} seconds before next retry...`);
+                    await sleep(currentDelay); 
                   }
-                });
-
-                const storyText = response.text;
+                }
+              }
+      
+              // JIKA 5x PERCOBAAN GEMINI 3.5 GAGAL, TURUN KE GEMINI 2.5
+              if (!success) {
+                currentModel = 'gemini-2.5-flash';
+                console.log(`\n!!! 5x Retries for gemini-3.5-flash failed. Falling back to ${currentModel}...`);
                 
-                fs.writeFileSync('tts-script.txt', storyText);
-                
-                console.log("=========================================");
-                console.log("Narrative Successfully Generated!");
-                console.log("=========================================");
-              } catch (error) {
-                core.setFailed(`Gemini Narrative Error: ${error.message}`);
+                try {
+                  const response = await ai.models.generateContent({
+                    model: currentModel, 
+                    contents: userPrompt,
+                    config: {
+                      systemInstruction: systemPrompt,
+                      temperature: 1.0, 
+                    }
+                      });
+      
+                  const storyText = response.text;
+                  fs.writeFileSync('tts-script.txt', storyText);
+                  
+                  console.log("=========================================");
+                  console.log(`Narrative Successfully Generated using Fallback Model (${currentModel})!`);
+                  console.log("=========================================");
+                  success = true;
+      
+                } catch (fallbackError) {
+                  lastError = fallbackError;
+                  console.error(`Fallback to ${currentModel} also failed.`);
+                }
+              }
+      
+              if (!success) {
+                core.setFailed(`Gemini Narrative Error (All retries and fallbacks exhausted): ${lastError.message}`);
               }
             }
-
+      
             run();
 
       - name: Check Script Analytics
