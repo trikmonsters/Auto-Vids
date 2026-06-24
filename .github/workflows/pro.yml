@@ -82,7 +82,7 @@ jobs:
             async function run() {
               const maxRetries = 5;
               let baseDelay = 20000;
-              let currentModel = 'gemini-3.5-flash';
+              let currentModel = 'gemini-flash-latest';
               let success = false;
               let lastError = null;
       
