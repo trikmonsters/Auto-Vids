@@ -1,0 +1,151 @@
+name: Render Automated Video 16:9
+
+on:
+  workflow_dispatch: # Memungkinkan Anda menjalankan pipeline secara manual dari tab Actions
+
+jobs:
+  render_video:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg unzip
+
+    - name: Download and Extract Assets from Release
+      run: |
+        echo "[INFO] Mengunduh aset dari release GitHub..."
+        curl -L -o audio.wav https://github.com/trikmonsters/Auto-Vids/releases/download/run-2/audio.wav
+        curl -L -o analysis.json https://github.com/trikmonsters/Auto-Vids/releases/download/run-2/analysis.json
+        curl -L -o images.zip https://github.com/trikmonsters/Auto-Vids/releases/download/run-2/images.zip
+        
+        echo "[INFO] Mengekstrak file gambar..."
+        unzip -q images.zip -d frames/
+
+    - name: Generate Subtitles and Render Video via Python Inline Script
+      shell: python
+      run: |
+        import json
+        import os
+        import subprocess
+
+        def split_text_into_chunks(text, num_words=2):
+            words = text.split()
+            if not words:
+                return []
+            return [" ".join(words[i:i+num_words]) for i in range(0, len(words), num_words)]
+
+        def time_to_seconds(mm_ss):
+            try:
+                m, s = map(int, mm_ss.split(':'))
+                return float(m * 60 + s)
+            except ValueError:
+                return 0.0
+
+        def seconds_to_ass(seconds):
+            h = int(seconds // 3600)
+            m = int((seconds % 3600) // 60)
+            s = int(seconds % 60)
+            c = int(round((seconds - int(seconds)) * 100))
+            if c >= 100:
+                c = 99
+            return f"{h}:{m:02d}:{s:02d}.{c:02d}"
+
+        # 1. GENERATE SUBTITLE ASS (Resolusi Base 16:9 = 1920x1080)
+        with open("analysis.json", "r") as f:
+            data = json.load(f)
+        
+        segments = data['segments']
+        
+        # Style ASS disesuaikan untuk layar 1920x1080 (Landscape)
+        # MarginV diturunkan ke 250 agar teks berada di area tengah agak ke bawah layar
+        ass_header = """[Script Info]
+        ScriptType: v4.00+
+        PlayResX: 1920
+        PlayResY: 1080
+
+        [V4+ Styles]
+        Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+        Style: Default,Arial,60,&H0000FFFF,&H0000FFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,10,10,250,1
+
+        [Events]
+        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+        """
+        
+        body = ""
+        for seg in segments:
+            seg_start = time_to_seconds(seg['start'])
+            seg_end = time_to_seconds(seg['end'])
+            seg_duration = seg_end - seg_start
+            
+            chunks = split_text_into_chunks(seg['subtitle'], num_words=2)
+            if not chunks:
+                continue
+                
+            chunk_duration = seg_duration / len(chunks)
+            
+            for i, chunk in enumerate(chunks):
+                current_start = seg_start + (i * chunk_duration)
+                current_end = current_start + chunk_duration
+                
+                if i == len(chunks) - 1:
+                    current_end = seg_end
+                    
+                start_ass = seconds_to_ass(current_start)
+                end_ass = seconds_to_ass(current_end)
+                
+                clean_chunk = chunk.strip().upper()
+                body += f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{clean_chunk}\n"
+
+        with open("subtitles.ass", "w", encoding="utf-8") as f:
+            f.write(ass_header + body)
+
+        # 2. GENERATE CONCAT FILE UNTUK GAMBAR STATIS (001.png, 002.png, dst)
+        with open("input_images.txt", "w") as f:
+            for i, seg in enumerate(segments):
+                img_id = i + 1
+                img_name = f"{img_id:03d}.png"
+                
+                seg_start = time_to_seconds(seg['start'])
+                seg_end = time_to_seconds(seg['end'])
+                duration = seg_end - seg_start
+                
+                if os.path.exists(f"frames/{img_name}"):
+                    f.write(f"file 'frames/{img_name}'\n")
+                    f.write(f"duration {duration}\n")
+                else:
+                    print(f"[WARNING] File frames/{img_name} tidak ditemukan.")
+            
+            if segments:
+                f.write(f"file 'frames/{len(segments):03d}.png'\n")
+
+        # 3. RUN FFMPEG RENDER (Resolusi Output Tetap 16:9 / 1920x1080)
+        print("[INFO] Memulai proses pembuatan video dengan FFmpeg...")
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0", "-i", "input_images.txt",
+            "-i", "audio.wav",
+            "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,subtitles=subtitles.ass",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+            "-c:a", "aac", "-b:a", "192k",
+            "-shortest", "final_output.mp4"
+        ]
+        
+        subprocess.run(ffmpeg_cmd, check=True)
+        print("[SUCCESS] Pipeline selesai! Video tersimpan di final_output.mp4")
+
+    # 4. SIMPAN HASIL VIDEO KE ARTIFACTS GITHUB
+    - name: Upload Final Video
+      uses: actions/upload-artifact@v4
+      with:
+        name: final-16x9-video
+        path: final_output.mp4
