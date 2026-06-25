@@ -1,7 +1,7 @@
 name: Render Automated Video 16:9
 
 on:
-  workflow_dispatch: # Memungkinkan Anda menjalankan pipeline secara manual dari tab Actions
+  workflow_dispatch:
 
 jobs:
   render_video:
@@ -29,6 +29,7 @@ jobs:
         curl -L -o images.zip https://github.com/trikmonsters/Auto-Vids/releases/download/run-2/images.zip
         
         echo "[INFO] Mengekstrak file gambar..."
+        # Ekstrak langsung ke folder kerja saat ini
         unzip -q images.zip -d frames/
 
     - name: Generate Subtitles and Render Video via Python Inline Script
@@ -37,6 +38,7 @@ jobs:
         import json
         import os
         import subprocess
+        import glob
 
         def split_text_into_chunks(text, num_words=2):
             words = text.split()
@@ -60,26 +62,31 @@ jobs:
                 c = 99
             return f"{h}:{m:02d}:{s:02d}.{c:02d}"
 
-        # 1. GENERATE SUBTITLE ASS (Resolusi Base 16:9 = 1920x1080)
+        # JALUR PASUT: Deteksi folder otomatis (Akan menunjuk langsung ke frames/images)
+        all_jpg_files = glob.glob("frames/**/*.jpg", recursive=True)
+        if not all_jpg_files:
+            raise FileNotFoundError("Sama sekali tidak ada file .jpg ditemukan di dalam folder frames/! Periksa isi images.zip Anda.")
+        
+        base_frames_dir = os.path.dirname(all_jpg_files[0])
+        print(f"[INFO] Folder gambar .jpg terdeteksi di: {base_frames_dir}")
+
+        # 1. GENERATE SUBTITLE ASS (Gaya Premium Subtitle Pendek)
         with open("analysis.json", "r") as f:
             data = json.load(f)
         
         segments = data['segments']
         
-        # Style ASS disesuaikan untuk layar 1920x1080 (Landscape)
-        # MarginV diturunkan ke 250 agar teks berada di area tengah agak ke bawah layar
-        ass_header = """[Script Info]
-        ScriptType: v4.00+
-        PlayResX: 1920
-        PlayResY: 1080
-
-        [V4+ Styles]
-        Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-        Style: Default,Arial,60,&H0000FFFF,&H0000FFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,10,10,250,1
-
-        [Events]
-        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-        """
+        ass_header = (
+            "[Script Info]\n"
+            "ScriptType: v4.00+\n"
+            "PlayResX: 1920\n"
+            "PlayResY: 1080\n\n"
+            "[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            "Style: Default,Arial,60,&H0000FFFF,&H0000FFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,10,10,250,1\n\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        )
         
         body = ""
         for seg in segments:
@@ -109,26 +116,36 @@ jobs:
         with open("subtitles.ass", "w", encoding="utf-8") as f:
             f.write(ass_header + body)
 
-        # 2. GENERATE CONCAT FILE UNTUK GAMBAR STATIS (001.png, 002.png, dst)
+        # 2. GENERATE CONCAT FILE UNTUK STRUKTUR (images/001.jpg)
+        last_valid_img = None
         with open("input_images.txt", "w") as f:
             for i, seg in enumerate(segments):
                 img_id = i + 1
-                img_name = f"{img_id:03d}.png"
+                
+                # Sesuai dengan format nama yang Anda buat: 001.jpg, 002.jpg, dst
+                img_name = f"{img_id:03d}.jpg"
+                img_path = os.path.join(base_frames_dir, img_name)
                 
                 seg_start = time_to_seconds(seg['start'])
                 seg_end = time_to_seconds(seg['end'])
                 duration = seg_end - seg_start
                 
-                if os.path.exists(f"frames/{img_name}"):
-                    f.write(f"file 'frames/{img_name}'\n")
+                if os.path.exists(img_path):
+                    safe_path = img_path.replace("'", "'\\''")
+                    f.write(f"file '{safe_path}'\n")
                     f.write(f"duration {duration}\n")
+                    last_valid_img = safe_path
                 else:
-                    print(f"[WARNING] File frames/{img_name} tidak ditemukan.")
+                    print(f"[WARNING] File {img_path} tidak ditemukan. Menggunakan gambar sebelumnya.")
+                    if last_valid_img:
+                        f.write(f"file '{last_valid_img}'\n")
+                        f.write(f"duration {duration}\n")
             
-            if segments:
-                f.write(f"file 'frames/{len(segments):03d}.png'\n")
+            # Duplikasi baris terakhir (Mencegah bug render frame akhir FFmpeg)
+            if last_valid_img:
+                f.write(f"file '{last_valid_img}'\n")
 
-        # 3. RUN FFMPEG RENDER (Resolusi Output Tetap 16:9 / 1920x1080)
+        # 3. RUN FFMPEG RENDER 16:9
         print("[INFO] Memulai proses pembuatan video dengan FFmpeg...")
         ffmpeg_cmd = [
             "ffmpeg", "-y",
@@ -143,7 +160,6 @@ jobs:
         subprocess.run(ffmpeg_cmd, check=True)
         print("[SUCCESS] Pipeline selesai! Video tersimpan di final_output.mp4")
 
-    # 4. SIMPAN HASIL VIDEO KE ARTIFACTS GITHUB
     - name: Upload Final Video
       uses: actions/upload-artifact@v4
       with:
