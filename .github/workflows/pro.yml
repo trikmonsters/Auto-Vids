@@ -49,116 +49,92 @@ jobs:
       - name: Setup Node.js and Install Dependencies
         run: |
           npm init -y
-          npm install @google/genai playwright
+          npm install playwright
           npx playwright install chromium
 
       - name: Prepare Workspace
         run: |
           mkdir -p output release
 
-      - name: Generate Psychological Narrative from Topic
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { GoogleGenAI } = require('@google/genai');
-            const fs = require('fs');
-      
-            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-                        
-            const systemPrompt = `You are an elite, avant-garde psychological storyteller and narrative designer. Your goal is to write long-form, deeply creative, and highly immersive narratives based on a given topic. 
-            CRITICAL MANDATE: You must completely avoid clichés, predictable tropes, and generic AI writing structures (e.g., introducing a character named "Leo who always wondered...", or starting with "In a world where..."). Every story concept must be an entirely fresh, original psychological perspective that has never been used before.
-            Follow these strict structural guidelines for every output:
-            1. Tone & Style: Atmospheric, intellectually stimulating, deeply psychological, and cinematic. Use vivid imagery and unconventional metaphors.
-            2. Narrative Length: Write an extended, multi-paragraph narrative (minimum 1000-1500 words) that explores the psychological depth of the topic. Do not rush the ending.
-            3. Psychological Core: Focus on internal conflict, cognitive biases, the subconscious, altered states of mind, or the complexity of human behavior.
-            4. Output Language: Perfect, sophisticated English.
-            Formatting Structure for Output:
-            - Each paragraph MUST be dense, descriptive, and substantial, containing a MINIMUM of 4 long, fully-developed sentences (at least 4 lines of text per paragraph). Short, single-sentence, or fragmented paragraphs are strictly forbidden.`;
-  
-            const userPrompt = `Act as the System Prompt instructed. Generate a brand-new, deeply psychological, and highly creative long-form narrative. Ensure each paragraph is thick and fully developed with at least 4 sentences/lines.\n\nTopic/Title: ${process.env.TOPIC_INPUT}\n\nEnsure the plot twist or core psychological angle is entirely unpredictable and uniquely conceptualized. Write it in English.`;
-            
-            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  
-            async function run() {
-              const maxRetries = 5;
-              let baseDelay = 20000;
-              let currentModel = 'gemini-3.5-flash';
-              let success = false;
-              let lastError = null;
-      
-              console.log(`Starting narrative generation for topic: ${process.env.TOPIC_INPUT}`);
-      
-              for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                  console.log(`[Attempt ${attempt}/${maxRetries}] Using model: ${currentModel}...`);
-                  
-                  const response = await ai.models.generateContent({
-                    model: currentModel, 
-                    contents: userPrompt,
-                    config: {
-                      systemInstruction: systemPrompt,
-                      temperature: 1.0, 
-                    }
-                  });
-      
-                  const storyText = response.text;
-                  fs.writeFileSync('tts-script.txt', storyText);
-                  
-                  console.log("=========================================");
-                  console.log(`Narrative Successfully Generated using ${currentModel}!`);
-                  console.log("=========================================");
-                  
-                  success = true;
-                  break;
-      
-                } catch (error) {
-                  lastError = error;
-                  console.warn(`[Attempt ${attempt}] Failed. Error: ${error.message}`);
-                  
-                  if (attempt < maxRetries) {
-                    let currentDelay = baseDelay * Math.pow(2, attempt - 1);
-                    console.log(`Waiting ${currentDelay / 1000} seconds before next retry...`);
-                    await sleep(currentDelay); 
-                  }
-                }
-              }
-    
-              if (!success) {
-                currentModel = 'gemini-2.5-flash';
-                console.log(`\n!!! 5x Retries for gemini-3.5-flash failed. Falling back to ${currentModel}...`);
-                
-                try {
-                  const response = await ai.models.generateContent({
-                    model: currentModel, 
-                    contents: userPrompt,
-                    config: {
-                      systemInstruction: systemPrompt,
-                      temperature: 1.0, 
-                    }
-                      });
-      
-                  const storyText = response.text;
-                  fs.writeFileSync('tts-script.txt', storyText);
+      - name: Generate script with Elite Narrative Design
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TOPIC_INPUT: ${{ github.event.inputs.topic }}
+        run: |
+          # System Prompt yang telah disempurnakan
+          SYSTEM_PROMPT="You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away. CRITICAL ENGAGEMENT MANDATE: 1. THE CEREBRAL HOOK: Every single paragraph must begin with a 'psychological hook'—a provocative, counter-intuitive, or startling observation about the human mind that immediately demands resolution in the next sentences. Never start with a generic question. Start with a cold, piercing insight. 2. NARRATIVE DENSITY: Every paragraph must be a dense, heavy block of text (minimum 4-6 long, complex sentences). No bullet points, no short lines, no white space between paragraphs. The text should feel like a relentless stream of consciousness. 3. ATMOSPHERIC PSYCHOLOGY: Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. 4. ABSOLUTE PROHIBITIONS: No 'In summary', 'In conclusion', 'It is important to remember', or 'Human behavior is complex'. No archetypal characters (no 'John' or 'Mary'). No generic advice. 5. THE TWIST: The narrative must escalate from a relatable psychological premise into a surreal, existential realization that leaves the reader questioning the architecture of their own mind."
 
-                  console.log(storyText)
-                  
-                  console.log("=========================================");
-                  console.log(`Narrative Successfully Generated using Fallback Model (${currentModel})!`);
-                  console.log("=========================================");
-                  success = true;
-      
-                } catch (fallbackError) {
-                  lastError = fallbackError;
-                  console.error(`Fallback to ${currentModel} also failed.`);
-                }
-              }
-      
-              if (!success) {
-                core.setFailed(`Gemini Narrative Error (All retries and fallbacks exhausted): ${lastError.message}`);
-              }
-            }
-      
-            run();
+          # User Prompt yang dipadukan dengan topik input
+          USER_PROMPT="Write a 1500+ word, highly immersive psychological narrative on the topic: '$TOPIC_INPUT'. Structure: - Every paragraph MUST begin with an aggressive, hook-driven insight. - Maintain a cold, cinematic, and sophisticated tone. - Ensure the narrative deepens into existential dread or profound discovery. - Use dense, academic-poetic language. Write in English."
+
+          MAX_RETRIES=5
+          SUCCESS=false
+
+          echo "Topic     : $TOPIC_INPUT"
+          echo "Model     : openrouter/owl-alpha"
+          echo ""
+
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "========================================="
+            echo "[Attempt $attempt/$MAX_RETRIES] Calling OpenRouter..."
+            echo "========================================="
+
+            HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" --max-time 120 \
+              https://openrouter.ai/api/v1/chat/completions \
+              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg model "openrouter/owl-alpha" \
+                --arg sp "$SYSTEM_PROMPT" \
+                --arg up "$USER_PROMPT" \
+                '{
+                  model: $model,
+                  messages: [{role: "system", content: $sp}, {role: "user", content: $up}],
+                  temperature: 0.7,
+                  max_tokens: 4000,
+                  presence_penalty: 0.8,
+                  frequency_penalty: 0.7
+                }')")
+
+            STORY_TEXT=$(jq -r '.choices[0].message.content // empty' response.json 2>/dev/null)
+            ERROR_MSG=$(jq -r '.error.message // empty' response.json 2>/dev/null)
+
+            if [ "$HTTP_CODE" = "200" ] && [ -n "$STORY_TEXT" ]; then
+              printf '%s' "$STORY_TEXT" > tts-script.txt
+              WORD_COUNT=$(wc -w < tts-script.txt)
+              echo "✓ Narrative generated successfully ($WORD_COUNT words)"
+              SUCCESS=true
+              break
+            else
+              echo "Failed (HTTP $HTTP_CODE). Error: ${ERROR_MSG:-Unknown / empty response}"
+              echo "Raw response (truncated):"
+              head -c 300 response.json
+              echo ""
+
+              if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+                if [ "$HTTP_CODE" = "429" ]; then
+                  WAIT=$((60 * attempt))
+                else
+                  WAIT=$((15 * attempt))
+                fi
+                echo "Menunggu ${WAIT}s sebelum retry..."
+                sleep "$WAIT"
+              fi
+            fi
+          done
+
+          if [ "$SUCCESS" != "true" ]; then
+            echo "::error::Gagal generate narasi dari OpenRouter (owl-alpha) setelah $MAX_RETRIES percobaan."
+            exit 1
+          fi
+
+          echo "========================================="
+          echo "GENERATED NARRATIVE SCRIPT"
+          echo "========================================="
+          cat tts-script.txt
+          echo "========================================="
+          echo "END OF SCRIPT"
+          echo "========================================="
 
       - name: Check Script Analytics
         run: |
@@ -189,14 +165,9 @@ jobs:
           CHANNELS = 1
           SAMPLE_WIDTH = 2
 
-          # ============================================================
-          # SOLUSI 1: Chunking dinamis berbasis JUMLAH KATA, bukan jumlah
-          # paragraf. Ini memastikan total request TTS selalu terkontrol
-          # berapa pun banyaknya paragraf yang dihasilkan Gemini, dan tidak
-          # pernah melebihi kuota harian (RPD) pada free tier.
-          # ============================================================
-          TARGET_WORDS_PER_CHUNK = 320   # ~2 menit audio/chunk -> aman dari truncation & drift kualitas TTS
-          MAX_REQUESTS = 8               # buffer di bawah limit harian (RPD 10) untuk sisa retry
+        
+          TARGET_WORDS_PER_CHUNK = 320 
+          MAX_REQUESTS = 9     
           MODEL_NAME = "gemini-3.1-flash-tts-preview"
 
           print("\n" + "="*70)
@@ -288,13 +259,7 @@ jobs:
               prompt_text = build_prompt(p, i, len(paragraphs))
               success = False
 
-              # ============================================================
-              # SOLUSI 2: Retry logic TERPISAH untuk 429 (kuota habis) vs
-              # 503/500 (server overload). Dua error ini punya sebab berbeda,
-              # jadi strategi tunggunya juga harus berbeda:
-              #  - 429/quota -> retry cepat TIDAK membantu, harus tunggu lama
-              #  - 503/500/overload -> biasanya transient, backoff pendek cukup
-              # ============================================================
+
               for retry in range(5):
                   try:
                       response = call_tts(prompt_text)
