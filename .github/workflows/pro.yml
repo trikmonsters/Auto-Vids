@@ -82,7 +82,7 @@ jobs:
             async function run() {
               const maxRetries = 5;
               let baseDelay = 20000;
-              let currentModel = 'gemini-flash-latest';
+              let currentModel = 'gemini-3.5-flash';
               let success = false;
               let lastError = null;
       
@@ -189,27 +189,62 @@ jobs:
           CHANNELS = 1
           SAMPLE_WIDTH = 2
 
+          # ============================================================
+          # SOLUSI 1: Chunking dinamis berbasis JUMLAH KATA, bukan jumlah
+          # paragraf. Ini memastikan total request TTS selalu terkontrol
+          # berapa pun banyaknya paragraf yang dihasilkan Gemini, dan tidak
+          # pernah melebihi kuota harian (RPD) pada free tier.
+          # ============================================================
+          TARGET_WORDS_PER_CHUNK = 320   # ~2 menit audio/chunk -> aman dari truncation & drift kualitas TTS
+          MAX_REQUESTS = 8               # buffer di bawah limit harian (RPD 10) untuk sisa retry
+          MODEL_NAME = "gemini-3.1-flash-tts-preview"
+
           print("\n" + "="*70)
-          print(" GEMINI TTS - RATE LIMIT BYPASS MODE ")
+          print(" GEMINI TTS - SMART CHUNKING + RATE LIMIT SAFE MODE ")
           print("="*70)
 
           with open("tts-script.txt", "r", encoding="utf8") as f:
               raw = f.read().strip()
-          
+
           single_paragraphs = [p.strip() for p in raw.split("\n\n") if p.strip()]
-          
+
           if not single_paragraphs:
               print("Error: No paragraphs found!")
               exit(1)
 
           paragraphs = []
-          for i in range(0, len(single_paragraphs), 2):
-              chunk = single_paragraphs[i:i+2]
-              paragraphs.append("\n\n".join(chunk))
-          
+          current_chunk = []
+          current_words = 0
+
+          for p in single_paragraphs:
+              wc = len(p.split())
+              if current_words + wc > TARGET_WORDS_PER_CHUNK and current_chunk:
+                  paragraphs.append("\n\n".join(current_chunk))
+                  current_chunk = []
+                  current_words = 0
+              current_chunk.append(p)
+              current_words += wc
+
+          if current_chunk:
+              paragraphs.append("\n\n".join(current_chunk))
+
+          # Safety net: kalau narasi sangat panjang/paragrafnya sangat pendek-pendek,
+          # tetap paksa jumlah request <= MAX_REQUESTS dengan menggabungkan chunk berdekatan.
+          while len(paragraphs) > MAX_REQUESTS:
+              merged = []
+              i = 0
+              while i < len(paragraphs):
+                  if i + 1 < len(paragraphs):
+                      merged.append(paragraphs[i] + "\n\n" + paragraphs[i + 1])
+                      i += 2
+                  else:
+                      merged.append(paragraphs[i])
+                      i += 1
+              paragraphs = merged
+
           print(f"Voice            : {VOICE}")
           print(f"Language         : {LANGUAGE}")
-          print(f"Total Batches    : {len(paragraphs)}")
+          print(f"Total Batches    : {len(paragraphs)} (limit aman: {MAX_REQUESTS})")
           print("Rate Limit Safe  : Active (Max 3 requests per minute)\n")
 
           client = genai.Client(api_key=API_KEY)
@@ -227,31 +262,43 @@ jobs:
                   style = "Speak naturally like a professional narrator."
               return f"Language: {LANGUAGE}\n\n{style}\n\n{textwrap.dedent(text)}"
 
+          def call_tts(prompt_text):
+              return client.models.generate_content(
+                  model=MODEL_NAME,
+                  contents=prompt_text,
+                  config=types.GenerateContentConfig(
+                      response_modalities=["AUDIO"],
+                      speech_config=types.SpeechConfig(
+                          voice_config=types.VoiceConfig(
+                              prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                  voice_name=VOICE
+                              )
+                          )
+                      )
+                  )
+              )
+
           pcm = []
 
           for i, p in enumerate(paragraphs):
               print("-"*70)
               print(f"Processing Batch {i+1}/{len(paragraphs)}")
               print(textwrap.shorten(p.replace('\n', ' '), 80))
-              
+
+              prompt_text = build_prompt(p, i, len(paragraphs))
               success = False
-              for retry in range(4):
+
+              # ============================================================
+              # SOLUSI 2: Retry logic TERPISAH untuk 429 (kuota habis) vs
+              # 503/500 (server overload). Dua error ini punya sebab berbeda,
+              # jadi strategi tunggunya juga harus berbeda:
+              #  - 429/quota -> retry cepat TIDAK membantu, harus tunggu lama
+              #  - 503/500/overload -> biasanya transient, backoff pendek cukup
+              # ============================================================
+              for retry in range(5):
                   try:
-                      response = client.models.generate_content(
-                          model="gemini-3.1-flash-tts-preview",
-                          contents=build_prompt(p, i, len(paragraphs)),
-                          config=types.GenerateContentConfig(
-                              response_modalities=["AUDIO"],
-                              speech_config=types.SpeechConfig(
-                                  voice_config=types.VoiceConfig(
-                                      prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                          voice_name=VOICE
-                                      )
-                                  )
-                              )
-                          )
-                      )
-                      
+                      response = call_tts(prompt_text)
+
                       if response.candidates and response.candidates[0].content.parts:
                           audio = response.candidates[0].content.parts[0].inline_data.data
                           pcm.append(audio)
@@ -259,21 +306,36 @@ jobs:
                           success = True
                           break
                       else:
-                          print("No audio data received")
-                          
+                          print("No audio data received, retrying...")
+                          time.sleep(15)
+
                   except Exception as e:
-                      print(f"Rate limit hit or Error (attempt {retry+1}): {e}")
-                      print("Waiting longer to recover...")
-                      time.sleep(30 * (retry + 1)) # Jeda agresif jika terdeteksi limit
-              
+                      msg = str(e)
+
+                      if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+                          wait = 90 * (retry + 1)
+                          print(f"[429] Kena limit kuota RPM/RPD (attempt {retry+1}/5): {e}")
+                          print(f"Menunggu {wait}s sebelum retry (kuota perlu waktu untuk reset)...")
+                          time.sleep(wait)
+
+                      elif "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
+                          wait = 20 * (retry + 1)
+                          print(f"[503/500] Server overload / model sibuk (attempt {retry+1}/5): {e}")
+                          print(f"Menunggu {wait}s sebelum retry...")
+                          time.sleep(wait)
+
+                      else:
+                          wait = 20 * (retry + 1)
+                          print(f"Error tak terduga (attempt {retry+1}/5): {e}")
+                          time.sleep(wait)
+
               if not success:
-                  print(f"Failed at batch {i+1}")
+                  print(f"Failed at batch {i+1} setelah semua retry gagal.")
                   exit(1)
-              
+
               if i != len(paragraphs) - 1:
                   pcm.append(silence(GAP))
-                  
-                  print("⏳ Cooling down for 18 seconds to respect Gemini Free Tier 4-RPM Limit...")
+                  print("⏳ Cooling down 21 seconds to respect Gemini Free Tier RPM Limit...")
                   time.sleep(21)
 
           out = "output/audio.wav"
@@ -284,7 +346,7 @@ jobs:
               wf.writeframes(b"".join(pcm))
 
           duration = sum(len(x) for x in pcm) / (SAMPLE_RATE * SAMPLE_WIDTH)
-          
+
           print("\n" + "="*70)
           print("SUCCESSFULLY COMPLETED")
           print("="*70)
