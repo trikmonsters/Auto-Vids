@@ -71,7 +71,7 @@ jobs:
           SYSTEM_PROMPT="You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away. CRITICAL ENGAGEMENT MANDATE: 1. THE CEREBRAL HOOK: Every single paragraph must begin with a 'psychological hook'—a provocative, counter-intuitive, or startling observation about the human mind that immediately demands resolution in the next sentences. Never start with a generic question. Start with a cold, piercing insight. 2. NARRATIVE DENSITY: Every paragraph must be a dense, heavy block of text (minimum 4-6 long, complex sentences). No bullet points, no short lines, no white space between paragraphs. The text should feel like a relentless stream of consciousness. 3. ATMOSPHERIC PSYCHOLOGY: Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. 4. ABSOLUTE PROHIBITIONS: No 'In summary', 'In conclusion', 'It is important to remember', or 'Human behavior is complex'. No archetypal characters (no 'John' or 'Mary'). No generic advice. 5. THE TWIST: The narrative must escalate from a relatable psychological premise into a surreal, existential realization that leaves the reader questioning the architecture of their own mind."
 
           # User Prompt yang dipadukan dengan topik input
-          USER_PROMPT="Write a 1500+ word, highly immersive psychological narrative on the topic: '$TOPIC_INPUT'. Structure: - Every paragraph MUST begin with an aggressive, hook-driven insight. - Maintain a cold, cinematic, and sophisticated tone. - Ensure the narrative deepens into existential dread or profound discovery. - Use dense, academic-poetic language. Write in English."
+          USER_PROMPT="Write a 1500+ - 2000 word, highly immersive psychological narrative on the topic: '$TOPIC_INPUT'. Structure: - Every paragraph MUST begin with an aggressive, hook-driven insight. - Maintain a cold, cinematic, and sophisticated tone. - Ensure the narrative deepens into existential dread or profound discovery. - Use dense, academic-poetic language. Write in English."
 
           MAX_RETRIES=5
           SUCCESS=false
@@ -343,11 +343,63 @@ jobs:
           python3 << 'PYEOF'
           import json
           import os
+          import time
           import textwrap
           from google import genai
           from google.genai import types
 
           client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+          # ============================================================
+          # Daftar model fallback. Kalau model pertama kena 503/overload,
+          # otomatis lanjut ke model berikutnya. Kalau SEMUA model di list
+          # ini sudah dicoba dan tetap 503, ulangi lagi dari awal list
+          # (MAX_ROUNDS putaran) dengan jeda yang makin panjang.
+          # ============================================================
+          MODEL_LIST = [
+              "gemini-3.5-flash",
+              "gemini-3.1-pro-preview",
+              "gemini-3.1-flash-lite",
+              "gemini-3-flash-preview",
+              "gemma-4-26b-a4b-it",
+              "gemma-4-31b-it",
+          ]
+          MAX_ROUNDS = 3
+
+          def analyze_chunk(audio_file, prompt, sys_instruction, label):
+              last_error = None
+              for round_num in range(1, MAX_ROUNDS + 1):
+                  for model_name in MODEL_LIST:
+                      print(f"[{label}] Round {round_num}/{MAX_ROUNDS} -> mencoba model: {model_name}")
+                      try:
+                          response = client.models.generate_content(
+                              model=model_name,
+                              contents=[audio_file, prompt],
+                              config=types.GenerateContentConfig(
+                                  system_instruction=sys_instruction,
+                                  response_mime_type="application/json"
+                              )
+                          )
+                          data = json.loads(response.text)
+                          print(f"  ✓ [{label}] Berhasil dengan model {model_name} ({len(data.get('segments', []))} segments)")
+                          return data
+                      except Exception as e:
+                          last_error = e
+                          msg = str(e)
+                          if "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
+                              print(f"  ⚠️ {model_name} overload (503/500), lanjut ke model berikutnya...")
+                          elif "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+                              print(f"  ⚠️ {model_name} kena limit kuota (429), lanjut ke model berikutnya...")
+                          else:
+                              print(f"  ⚠️ {model_name} error: {str(e)[:200]}")
+
+                  if round_num < MAX_ROUNDS:
+                      wait = 30 * round_num
+                      print(f"[{label}] Semua {len(MODEL_LIST)} model gagal di round {round_num}. Menunggu {wait}s lalu mengulang dari model pertama...")
+                      time.sleep(wait)
+
+              print(f"[{label}] ⚠️ GAGAL TOTAL setelah {MAX_ROUNDS} putaran x {len(MODEL_LIST)} model. Error terakhir: {last_error}")
+              return {"summary": f"Analisis {label} gagal total setelah semua model & retry dicoba.", "segments": []}
 
           print("\n" + "="*70)
           print(" AUDIO ANALYSIS (CHUNKED OMIT LIMIT MODE) ")
@@ -418,45 +470,18 @@ jobs:
 
           combined_segments = []
           summary_parts = []
-          
+
           print("Analyzing Audio Part 1/2...")
           prompt1 = base_prompt_template.format(text_chunk=chunk1_text)
-          response1 = client.models.generate_content(
-              model="gemini-3.5-flash",
-              contents=[audio, prompt1],
-              config=types.GenerateContentConfig(
-                  system_instruction=system_instruction,
-                  response_mime_type="application/json"
-              )
-          )
-          try:
-              data1 = json.loads(response1.text)
-              combined_segments.extend(data1.get("segments", []))
-              summary_parts.append(data1.get("summary", ""))
-              print(f"✓ Part 1 analyzed successfully ({len(data1.get('segments', []))} segments)")
-          except Exception as e:
-              print(f"Failed to parse Part 1 JSON. Raw output:\n{response1.text}")
-              raise e
+          data1 = analyze_chunk(audio, prompt1, system_instruction, "Part 1/2")
+          combined_segments.extend(data1.get("segments", []))
+          summary_parts.append(data1.get("summary", ""))
 
-  
           print("\nAnalyzing Audio Part 2/2...")
           prompt2 = base_prompt_template.format(text_chunk=chunk2_text)
-          response2 = client.models.generate_content(
-              model="gemini-3.5-flash",
-              contents=[audio, prompt2],
-              config=types.GenerateContentConfig(
-                  system_instruction=system_instruction,
-                  response_mime_type="application/json"
-              )
-          )
-          try:
-              data2 = json.loads(response2.text)
-              combined_segments.extend(data2.get("segments", []))
-              summary_parts.append(data2.get("summary", ""))
-              print(f"✓ Part 2 analyzed successfully ({len(data2.get('segments', []))} segments)")
-          except Exception as e:
-              print(f"Failed to parse Part 2 JSON. Raw output:\n{response2.text}")
-              raise e
+          data2 = analyze_chunk(audio, prompt2, system_instruction, "Part 2/2")
+          combined_segments.extend(data2.get("segments", []))
+          summary_parts.append(data2.get("summary", ""))
 
 
           final_analysis = {
