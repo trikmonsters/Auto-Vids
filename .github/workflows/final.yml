@@ -24,9 +24,9 @@ jobs:
     - name: Download and Extract Assets from Release
       run: |
         echo "[INFO] Mengunduh aset dari release GitHub..."
-        curl -L -o audio.wav https://github.com/trikmonsters/Auto-Vids/releases/download/run-6/audio.wav
-        curl -L -o analysis.json https://github.com/trikmonsters/Auto-Vids/releases/download/run-6/analysis.json
-        curl -L -o images.zip https://github.com/trikmonsters/Auto-Vids/releases/download/run-6/images.zip
+        curl -L -o audio.wav https://github.com/trikmonsters/Auto-Vids/releases/download/run-1/audio.wav
+        curl -L -o analysis.json https://github.com/trikmonsters/Auto-Vids/releases/download/run-1/analysis.json
+        curl -L -o images.zip https://github.com/trikmonsters/Auto-Vids/releases/download/run-1/images.zip
         
         echo "[INFO] Mengekstrak file gambar..."
         # Ekstrak langsung ke folder kerja saat ini
