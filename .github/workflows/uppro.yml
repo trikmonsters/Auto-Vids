@@ -1,4 +1,4 @@
-name: Project Video AI UP
+name: Project Video AI
 
 on:
   workflow_dispatch:
@@ -678,7 +678,7 @@ jobs:
         continue-on-error: true
         run: |
           python3 << 'PYEOF'
-          import json, os, subprocess, sys, shutil
+          import json, os, subprocess, sys, shutil, wave
 
           print("\n" + "="*70)
           print(" CONVERTING IMAGES & AUDIO TO 16:9 WIDESCREEN VIDEO ")
@@ -712,8 +712,43 @@ jobs:
               }
               MIN_TRANS_DUR = 0.04   # ~1 frame @25fps, dipakai utk transition_effect "none" (hard cut)
               MAX_TRANS_DUR = 1.5    # batas atas supaya tidak makan durasi klip pendek
+              FPS = 25
+
+              def build_vf(movement, duration):
+                  """
+                  PERBAIKAN UTAMA: zoompan ffmpeg punya bug terkenal kalau sumbernya
+                  gambar statis yang di-loop (-loop 1) -- variabel 'in' (input frame)
+                  TIDAK bertambah per frame, jadi ekspresi yang memakai 'in' (semua
+                  pan_* sebelumnya) menghasilkan posisi statis/diam, bukan bergerak.
+                  Solusi resmi yang direkomendasikan komunitas ffmpeg: pakai 'on'
+                  (output frame number), yang dijamin selalu bertambah per frame.
+                  Kita hitung total_frames secara eksplisit di Python lalu suntikkan
+                  sebagai angka literal ke ekspresi, jadi progress = on/total_frames
+                  selalu 0 -> 1 sepanjang klip, terlepas dari versi ffmpeg.
+                  """
+                  total_frames = max(1, int(round(duration * FPS)))
+
+                  if "zoom_in" in movement:
+                      z = f"1+0.3*on/{total_frames}"
+                      vf = f"scale=2560:1440,zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "zoom_out" in movement:
+                      z = f"1.3-0.3*on/{total_frames}"
+                      vf = f"scale=2560:1440,zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "pan_right" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='(on/{total_frames})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "pan_left" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='(1-(on/{total_frames}))*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "pan_up" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='iw/2-(iw/zoom/2)':y='(1-(on/{total_frames}))*(ih-ih/zoom)':s=1920x1080"
+                  elif "pan_down" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='iw/2-(iw/zoom/2)':y='(on/{total_frames})*(ih-ih/zoom)':s=1920x1080"
+                  else:
+                      vf = "scale=1920:1080"
+                  return vf
 
               clips = []  # list of dict: path, duration, transition_effect, transition_duration
+              last_good_image = None
+              reused_count = 0
 
               for i, seg in enumerate(segments):
                   # PERBAIKAN: Menggunakan .zfill(3) khas Python, bukan .padStart()
@@ -721,37 +756,34 @@ jobs:
                   img_path = f"release/images/{idx_str}.jpg"
                   duration = float(seg.get("duration", 5.0))
 
+                  # ============================================================
+                  # PERBAIKAN UTAMA: kalau gambar untuk segmen ini gagal dibuat,
+                  # JANGAN di-skip (itu yang menyebabkan semua segmen sesudahnya
+                  # bergeser maju / "posisi waktu tidak pas" dengan audio asli).
+                  # Pakai gambar sukses terakhir sebagai fallback, supaya durasi &
+                  # posisi segmen ini di timeline tetap terjaga.
+                  # ============================================================
                   if not os.path.exists(img_path):
-                      print(f"File gambar {img_path} tidak ditemukan, melewati segmen.")
-                      continue
+                      if last_good_image:
+                          print(f"⚠️ Gambar {idx_str} tidak ditemukan, pakai gambar segmen sebelumnya (durasi tetap terjaga).")
+                          img_path = last_good_image
+                          reused_count += 1
+                      else:
+                          print(f"⚠️ Gambar {idx_str} tidak ditemukan dan belum ada gambar fallback, segmen ini terpaksa dilewati.")
+                          continue
+                  else:
+                      last_good_image = img_path
 
                   segment_video = f"release/seg_{idx_str}.mp4"
                   movement = seg.get("camera_movement", "static")
-
-                  # SETTING RESOLUSI LANSKAP (1920x1080) & SKALA INPUT ZOOMPAN
-                  # PERBAIKAN: tambah cabang pan_up & pan_down yang sebelumnya hilang
-                  # (sehingga selalu jatuh ke "static" walau JSON minta pan_up/pan_down)
-                  if "zoom_in" in movement:
-                      vf_effects = "scale=2560:1440,zoompan=z='min(zoom+0.0015,1.3)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080"
-                  elif "zoom_out" in movement:
-                      vf_effects = "scale=2560:1440,zoompan=z='max(1.3-0.0015*in,1.0)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080"
-                  elif "pan_right" in movement:
-                      vf_effects = "scale=2560:1080,zoompan=z=1.2:x='0.002*in*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':s=1920x1080"
-                  elif "pan_left" in movement:
-                      vf_effects = "scale=2560:1080,zoompan=z=1.2:x='(1-0.002*in)*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':s=1920x1080"
-                  elif "pan_up" in movement:
-                      vf_effects = "scale=2560:1440,zoompan=z=1.2:x='iw/2-(iw/zoom/2)':y='(1-0.002*in)*(ih-ih/zoom)':s=1920x1080"
-                  elif "pan_down" in movement:
-                      vf_effects = "scale=2560:1440,zoompan=z=1.2:x='iw/2-(iw/zoom/2)':y='0.002*in*(ih-ih/zoom)':s=1920x1080"
-                  else:
-                      vf_effects = "scale=1920:1080"
+                  vf_effects = build_vf(movement, duration)
 
                   print(f"Memproses segmen 16:9 {idx_str} -> Durasi: {duration} s, Efek Kamera: {movement}")
 
                   cmd = [
                       "ffmpeg", "-y", "-loop", "1", "-i", img_path,
                       "-vf", vf_effects, "-c:v", "libx264", "-t", str(duration),
-                      "-pix_fmt", "yuv420p", "-r", "25", segment_video
+                      "-pix_fmt", "yuv420p", "-r", str(FPS), segment_video
                   ]
                   result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                   if result.returncode != 0:
@@ -769,6 +801,9 @@ jobs:
                       "transition_duration": trans_dur,
                   })
 
+              if reused_count:
+                  print(f"\nTotal {reused_count} segmen memakai gambar fallback (gambar asli gagal dibuat).")
+
               if not clips:
                   raise RuntimeError("Semua segmen gagal diproses, tidak ada video yang bisa disambung.")
 
@@ -778,9 +813,7 @@ jobs:
                   shutil.copy(clips[0]["path"], "release/visual_only.mp4")
               else:
                   # ============================================================
-                  # PERBAIKAN UTAMA: sebelumnya pakai ffmpeg concat demuxer (cuma
-                  # hard-cut, transition_effect dari JSON diabaikan total). Sekarang
-                  # pakai filter xfade berantai supaya transisi (fade/wipe/slide/dll)
+                  # Pakai filter xfade berantai supaya transisi (fade/wipe/slide/dll)
                   # benar-benar diterapkan sesuai data di analysis.json.
                   # ============================================================
                   inputs_args = []
@@ -809,17 +842,57 @@ jobs:
                   xfade_cmd = ["ffmpeg", "-y"] + inputs_args + [
                       "-filter_complex", filter_complex,
                       "-map", f"[{prev_label}]",
-                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "25",
+                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS),
                       "release/visual_only.mp4"
                   ]
                   result = subprocess.run(xfade_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                   if result.returncode != 0 or not os.path.exists("release/visual_only.mp4"):
                       raise RuntimeError(f"Gagal membuat transisi xfade: {result.stderr.decode(errors='ignore')[:500]}")
 
-              print("Menggabungkan visual dengan audio narasi asli...")
+              # ============================================================
+              # PERBAIKAN UTAMA: TIDAK pakai -shortest lagi. Durasi segmen di
+              # analysis.json sudah dihitung real-time dari durasi audio asli,
+              # jadi durasi video akhir WAJIB sama dengan audio -- bukan dipotong
+              # ke salah satu stream yang lebih pendek. Kalau visual_only.mp4
+              # sedikit lebih pendek dari audio (wajar, karena overlap xfade),
+              # kita extend dengan freeze-frame terakhir. Kalau lebih panjang,
+              # baru kita potong pas di durasi audio.
+              # ============================================================
+              with wave.open("output/audio.wav", "rb") as wf:
+                  audio_duration = wf.getnframes() / float(wf.getframerate())
+
+              probe = subprocess.run(
+                  ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                   "-of", "default=noprint_wrappers=1:nokey=1", "release/visual_only.mp4"],
+                  capture_output=True, text=True
+              )
+              video_duration = float(probe.stdout.strip() or 0)
+              diff = audio_duration - video_duration
+              print(f"\nDurasi audio asli   : {audio_duration:.2f}s")
+              print(f"Durasi visual track  : {video_duration:.2f}s (selisih: {diff:+.2f}s)")
+
+              visual_path = "release/visual_only.mp4"
+              if diff > 0.15:
+                  print(f"Visual lebih pendek dari audio, extend {diff:.2f}s dengan freeze-frame terakhir...")
+                  pad_cmd = [
+                      "ffmpeg", "-y", "-i", "release/visual_only.mp4",
+                      "-vf", f"tpad=stop_mode=clone:stop_duration={diff:.3f}",
+                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS),
+                      "release/visual_padded.mp4"
+                  ]
+                  result = subprocess.run(pad_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                  if result.returncode == 0 and os.path.exists("release/visual_padded.mp4"):
+                      visual_path = "release/visual_padded.mp4"
+                  else:
+                      print(f"⚠️ Gagal extend video, lanjut tanpa padding: {result.stderr.decode(errors='ignore')[:300]}")
+
+              print("Menggabungkan visual dengan audio narasi asli (durasi dikunci ke durasi audio)...")
               final_cmd = [
-                  "ffmpeg", "-y", "-i", "release/visual_only.mp4", "-i", "output/audio.wav",
-                  "-c:v", "copy", "-c:a", "aac", "-shortest", "output/final_project_video.mp4"
+                  "ffmpeg", "-y", "-i", visual_path, "-i", "output/audio.wav",
+                  "-c:v", "copy" if visual_path == "release/visual_only.mp4" and diff <= 0.15 else "libx264",
+                  "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-t", f"{audio_duration:.3f}",
+                  "output/final_project_video.mp4"
               ]
               result = subprocess.run(final_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
               if result.returncode != 0 or not os.path.exists("output/final_project_video.mp4"):
