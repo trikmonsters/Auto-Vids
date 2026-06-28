@@ -1,4 +1,4 @@
-name: Project Video AI
+name: Project Video AI V2
 
 on:
   workflow_dispatch:
