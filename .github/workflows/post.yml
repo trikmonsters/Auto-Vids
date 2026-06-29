@@ -1,0 +1,79 @@
+name: Full Automated YouTube Pipeline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+      YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+      YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install google-api-python-client google-auth-oauthlib
+
+      - name: Run All-in-One Pipeline
+        shell: python
+        run: |
+          import os, json, requests
+          from google.oauth2.credentials import Credentials
+          from google.auth.transport.requests import Request
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          # 1. Download Assets
+          def download(url, name):
+              with open(name, 'wb') as f:
+                  f.write(requests.get(url).content)
+          
+          print("📥 Downloading files...")
+          download("https://github.com/trikmonsters/Auto-Vids/releases/download/run-1/final_project_video.mp4", "video.mp4")
+          download("https://github.com/trikmonsters/Auto-Vids/releases/download/run-1/analysis.json", "analysis.json")
+          download("https://raw.githubusercontent.com/trikmonsters/Auto-Vids/main/ChatGPT%20Image%2030%20Jun%202026%2C%2002.19.01.png", "thumb.png")
+
+          # 2. Setup YouTube Service
+          creds = Credentials(
+              None, refresh_token=os.environ['YOUTUBE_REFRESH_TOKEN'],
+              token_uri="https://oauth2.googleapis.com/token",
+              client_id=os.environ['YOUTUBE_CLIENT_ID'],
+              client_secret=os.environ['YOUTUBE_CLIENT_SECRET'],
+              scopes=["https://www.googleapis.com/auth/youtube.upload"]
+          )
+          creds.refresh(Request())
+          youtube = build("youtube", "v3", credentials=creds)
+
+          # 3. Read Metadata
+          with open('analysis.json') as f:
+              meta = json.load(f)
+
+          # 4. Upload Video
+          print("📤 Uploading video...")
+          body = {
+              "snippet": {
+                  "title": meta['youtube_title'],
+                  "description": meta['youtube_description'],
+                  "tags": meta['youtube_tags'],
+                  "categoryId": "27"
+              },
+              "status": {"privacyStatus": "public"}
+          }
+          req = youtube.videos().insert(part="snippet,status", body=body, media_body=MediaFileUpload("video.mp4"))
+          resp = req.execute()
+          video_id = resp['id']
+          print(f"✅ Video Uploaded: {video_id}")
+
+          # 5. Set Thumbnail
+          print("🖼️ Setting thumbnail...")
+          youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload("thumb.png")).execute()
+          print("🚀 Done!")
