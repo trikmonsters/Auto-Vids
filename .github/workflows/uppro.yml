@@ -19,6 +19,15 @@ on:
         description: "Gap antar paragraf (detik)"
         required: false
         default: "1"
+      youtube_privacy:
+        description: "Status privasi video YouTube"
+        required: false
+        type: choice
+        options:
+          - private
+          - unlisted
+          - public
+        default: "public"
 
 permissions:
   contents: write
@@ -44,12 +53,12 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-genai
+          pip install google-genai google-api-python-client google-auth google-auth-oauthlib
 
       - name: Setup Node.js and Install Dependencies
         run: |
           npm init -y
-          npm install playwright
+          npm install playwright sharp
           npx playwright install chromium
 
       - name: Install FFmpeg
@@ -67,10 +76,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOPIC_INPUT: ${{ github.event.inputs.topic }}
         run: |
-          # System Prompt yang telah disempurnakan
           SYSTEM_PROMPT="You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away. CRITICAL ENGAGEMENT MANDATE: 1. THE CEREBRAL HOOK: Every single paragraph must begin with a 'psychological hook'—a provocative, counter-intuitive, or startling observation about the human mind that immediately demands resolution in the next sentences. Never start with a generic question. Start with a cold, piercing insight. 2. NARRATIVE DENSITY: Every paragraph must be a dense, heavy block of text (minimum 4-6 long, complex sentences). No bullet points, no short lines, no white space between paragraphs. The text should feel like a relentless stream of consciousness. 3. ATMOSPHERIC PSYCHOLOGY: Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. 4. ABSOLUTE PROHIBITIONS: No 'In summary', 'In conclusion', 'It is important to remember', or 'Human behavior is complex'. No archetypal characters (no 'John' or 'Mary'). No generic advice. 5. THE TWIST: The narrative must escalate from a relatable psychological premise into a surreal, existential realization that leaves the reader questioning the architecture of their own mind."
 
-          # User Prompt yang dipadukan dengan topik input
           USER_PROMPT="Write a 1500+ word, highly immersive psychological narrative on the topic: '$TOPIC_INPUT'. Structure: - Every paragraph MUST begin with an aggressive, hook-driven insight. - Maintain a cold, cinematic, and sophisticated tone. - Ensure the narrative deepens into existential dread or profound discovery. - Use dense, academic-poetic language. Write in English."
 
           MAX_RETRIES=5
@@ -149,7 +156,6 @@ jobs:
           echo "Generated Words      : $(wc -w < tts-script.txt)"
           echo "========================================="
 
-
       - name: Generate TTS Audio
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -171,12 +177,6 @@ jobs:
           CHANNELS = 1
           SAMPLE_WIDTH = 2
 
-          # ============================================================
-          # SOLUSI 1: Chunking dinamis berbasis JUMLAH KATA, bukan jumlah
-          # paragraf. Ini memastikan total request TTS selalu terkontrol
-          # berapa pun banyaknya paragraf yang dihasilkan Gemini, dan tidak
-          # pernah melebihi kuota harian (RPD) pada free tier.
-          # ============================================================
           TARGET_WORDS_PER_CHUNK = 320   # ~2 menit audio/chunk -> aman dari truncation & drift kualitas TTS
           MAX_REQUESTS = 8               # buffer di bawah limit harian (RPD 10) untuk sisa retry
           MODEL_NAME = "gemini-3.1-flash-tts-preview"
@@ -210,8 +210,6 @@ jobs:
           if current_chunk:
               paragraphs.append("\n\n".join(current_chunk))
 
-          # Safety net: kalau narasi sangat panjang/paragrafnya sangat pendek-pendek,
-          # tetap paksa jumlah request <= MAX_REQUESTS dengan menggabungkan chunk berdekatan.
           while len(paragraphs) > MAX_REQUESTS:
               merged = []
               i = 0
@@ -270,13 +268,6 @@ jobs:
               prompt_text = build_prompt(p, i, len(paragraphs))
               success = False
 
-              # ============================================================
-              # SOLUSI 2: Retry logic TERPISAH untuk 429 (kuota habis) vs
-              # 503/500 (server overload). Dua error ini punya sebab berbeda,
-              # jadi strategi tunggunya juga harus berbeda:
-              #  - 429/quota -> retry cepat TIDAK membantu, harus tunggu lama
-              #  - 503/500/overload -> biasanya transient, backoff pendek cukup
-              # ============================================================
               for retry in range(5):
                   try:
                       response = call_tts(prompt_text)
@@ -352,12 +343,6 @@ jobs:
 
           client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-          # ============================================================
-          # Daftar model fallback. Kalau model pertama kena 503/overload,
-          # otomatis lanjut ke model berikutnya. Kalau SEMUA model di list
-          # ini sudah dicoba dan tetap 503, ulangi lagi dari awal list
-          # (MAX_ROUNDS putaran) dengan jeda yang makin panjang.
-          # ============================================================
           MODEL_LIST = [
               "gemini-3.5-flash",
               "gemini-3.1-pro-preview",
@@ -386,12 +371,6 @@ jobs:
                           segments = data.get("segments", [])
                           total_seg_dur = sum(float(s.get("duration", 0) or 0) for s in segments)
 
-                          # --- VALIDASI KUALITAS HASIL ---
-                          # Kalau jumlah segmen di bawah batas minimum yang sudah kita
-                          # tetapkan sendiri (bukan dihitung ulang berbeda dari prompt),
-                          # atau total durasinya jauh di bawah durasi audio asli,
-                          # model ini dianggap gagal "under-segment" -> dipaksa lanjut
-                          # ke model berikutnya, bukan diterima begitu saja.
                           if expected_duration and min_segments_needed:
                               if len(segments) < min_segments_needed or total_seg_dur < expected_duration * 0.6:
                                   raise ValueError(
@@ -420,6 +399,61 @@ jobs:
 
               print(f"[{label}] ⚠️ GAGAL TOTAL setelah {MAX_ROUNDS} putaran x {len(MODEL_LIST)} model. Error terakhir: {last_error}")
               return {"summary": f"Analisis {label} gagal total setelah semua model & retry dicoba.", "segments": []}
+
+          def generate_metadata_with_fallback(prompt, sys_instruction):
+              """
+              Sama mekanisme fallback/retry seperti analyze_chunk, tapi text-only
+              (tidak perlu file audio) -- dipakai khusus untuk generate metadata
+              YouTube (judul/deskripsi/tags) + thumbnail_prompt berdasarkan naskah
+              & summary lengkap, bukan per-segmen.
+              """
+              last_error = None
+              for round_num in range(1, MAX_ROUNDS + 1):
+                  for model_name in MODEL_LIST:
+                      print(f"[YouTube Metadata] Round {round_num}/{MAX_ROUNDS} -> mencoba model: {model_name}")
+                      try:
+                          response = client.models.generate_content(
+                              model=model_name,
+                              contents=prompt,
+                              config=types.GenerateContentConfig(
+                                  system_instruction=sys_instruction,
+                                  response_mime_type="application/json"
+                              )
+                          )
+                          data = json.loads(response.text)
+                          title = (data.get("youtube_title") or "").strip()
+                          desc = (data.get("youtube_description") or "").strip()
+                          tags = data.get("youtube_tags") or []
+                          thumb = (data.get("thumbnail_prompt") or "").strip()
+
+                          if len(title) < 10:
+                              raise ValueError("youtube_title terlalu pendek/kosong")
+                          if len(desc) < 80:
+                              raise ValueError("youtube_description terlalu pendek/kosong")
+                          if len(tags) < 5:
+                              raise ValueError("youtube_tags terlalu sedikit (<5)")
+                          if len(thumb) < 300:
+                              raise ValueError("thumbnail_prompt terlalu pendek/kosong")
+
+                          print(f"  ✓ [YouTube Metadata] Berhasil dengan model {model_name}")
+                          return data
+                      except Exception as e:
+                          last_error = e
+                          msg = str(e)
+                          if "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
+                              print(f"  ⚠️ {model_name} overload (503/500), lanjut ke model berikutnya...")
+                          elif "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+                              print(f"  ⚠️ {model_name} kena limit kuota (429), lanjut ke model berikutnya...")
+                          else:
+                              print(f"  ⚠️ {model_name} error/hasil tidak valid: {str(e)[:200]}")
+
+                  if round_num < MAX_ROUNDS:
+                      wait = 30 * round_num
+                      print(f"[YouTube Metadata] Semua model gagal di round {round_num}. Menunggu {wait}s lalu mengulang...")
+                      time.sleep(wait)
+
+              print(f"[YouTube Metadata] ⚠️ GAGAL TOTAL setelah {MAX_ROUNDS} putaran. Error terakhir: {last_error}")
+              return None
 
           print("\n" + "="*70)
           print(" AUDIO ANALYSIS (CHUNKED OMIT LIMIT MODE) ")
@@ -502,7 +536,6 @@ jobs:
           single_paragraphs = [p.strip() for p in raw_script.split("\n\n") if p.strip()]
           total_words = len(raw_script.split()) or 1
 
-          # --- Hitung durasi audio asli secara real-time dari file WAV ---
           with wave.open("output/audio.wav", "rb") as wf:
               total_audio_duration = wf.getnframes() / float(wf.getframerate())
 
@@ -513,7 +546,6 @@ jobs:
           print(f"Estimasi total segmen    : ~{expected_total_segments} (target {TARGET_SEG_SECONDS:.0f}s/segmen, boleh lebih banyak)")
           print(f"Jumlah chunk analisis    : {num_chunks} (maks {MAX_SEGMENTS_PER_CALL} segmen/chunk supaya JSON tidak ter-truncate)\n")
 
-          # --- Pecah naskah jadi N chunk dinamis (bukan selalu 2 seperti sebelumnya) ---
           words_per_chunk_target = total_words / num_chunks
           chunks_text = []
           current = []
@@ -551,9 +583,94 @@ jobs:
               combined_segments.extend(data.get("segments", []))
               summary_parts.append(data.get("summary", ""))
 
+          combined_summary = " | ".join(summary_parts)
+
+          metadata_system_instruction = """
+          You are an elite YouTube growth strategist and SEO copywriter specializing in deep psychological/philosophical narrative content. You also direct hyper-effective thumbnail concepts.
+
+          Your job: given the full narration script and its psychological summary, produce YouTube upload metadata that maximizes click-through-rate AND audience satisfaction -- the video must genuinely deliver on whatever curiosity or promise the title/thumbnail creates. The goal is "irresistible but honest": the kind of hook that is actually the real answer to the exact question a curious viewer already has in their head. Never promise something the narrative does not actually deliver.
+
+          TITLE REQUIREMENTS:
+          - 50-70 characters. Front-load the most curiosity-inducing or emotionally charged phrase.
+          - Use a provocative psychological claim or question when it genuinely matches the content. Numbers/power-words are welcome if relevant.
+          - Strong SEO: naturally weave in the real search terms a curious viewer would type.
+
+          DESCRIPTION REQUIREMENTS:
+          - 150-300 words.
+          - The first 2 sentences must work as a strong SEO + curiosity hook (this is the part shown before "show more").
+          - Naturally include 3-5 relevant keyword phrases (not stuffed/repeated unnaturally).
+          - Briefly state what the viewer will learn, feel, or realize by watching. End with a soft call-to-action.
+
+          TAGS REQUIREMENTS:
+          - 12-20 tags, ordered most-relevant-first, mixing broad terms (e.g. "psychology", "human behavior") with specific phrases tied to this exact topic.
+
+          THUMBNAIL_PROMPT REQUIREMENTS:
+          - This is a SPECIAL, standalone image concept (not one of the narrative segments) -- it must distill the single most powerful, attention-grabbing moment or twist of the ENTIRE narrative into one image.
+          - Must read clearly at tiny size: ONE unmistakable focal subject, bold contrast, uncluttered composition, no busy background detail that disappears when shrunk.
+          - Same art style as the rest of the project: 2D modern flat vector illustration, avant-garde cartoonish character proportions, surreal psychological metaphor -- but pushed more dramatic/exaggerated than a normal segment, since this has to win the click in under a second.
+          - 1,800-2,500 characters, extremely detailed. Do NOT mention resolution, quality, or aspect-ratio buzzwords (e.g. '8K', '16:9') -- that is handled separately by the rendering pipeline.
+          - You may describe a short, bold on-image text treatment (a few words max) as part of the composition if it strengthens the hook, but the rest must remain pure visual description.
+
+          Strictly output ONLY valid JSON matching the exact schema provided. No markdown wrappers.
+          """
+
+          metadata_prompt = """
+          Here is the full narration script for this video:
+          \"\"\"{raw_script}\"\"\"
+
+          Here is the combined psychological analysis summary across all sections:
+          \"\"\"{combined_summary}\"\"\"
+
+          Based on the FULL content above, generate YouTube upload metadata and a special thumbnail concept.
+
+          Output must strictly follow this JSON structure:
+          {{
+            "youtube_title": "...",
+            "youtube_description": "...",
+            "youtube_tags": ["tag1", "tag2", "..."],
+            "thumbnail_prompt": "..."
+          }}
+          """.format(raw_script=raw_script, combined_summary=combined_summary)
+
+          print("\n" + "="*70)
+          print(" GENERATING YOUTUBE METADATA & THUMBNAIL PROMPT ")
+          print("="*70)
+
+          metadata = generate_metadata_with_fallback(metadata_prompt, metadata_system_instruction)
+
+          if not metadata:
+              print("⚠️ Memakai metadata fallback generik karena semua model gagal.")
+              metadata = {
+                  "youtube_title": (raw_script.split(".")[0].strip()[:65] if raw_script else "A Deep Psychological Narrative"),
+                  "youtube_description": "An immersive psychological narrative exploring the depths of the human mind, the subconscious, and the hidden architecture of our thoughts.",
+                  "youtube_tags": ["psychology", "human behavior", "mind", "subconscious", "deep narrative", "philosophy"],
+                  "thumbnail_prompt": "A minimalist 2D flat vector illustration of a single contemplative figure with avant-garde cartoonish proportions, facing a fractured mirror that reflects infinite distorted versions of themselves, deep midnight blue background, dramatic high-contrast vector shadows, bold rich terracotta clothing, ultra-thin light-gray architectural line art in the background, clinical white canvas, surreal psychological metaphor of identity fragmentation, premium editorial flat design aesthetic, no resolution or aspect ratio mentioned."
+              }
+
+          def clamp_text(text, max_len):
+              """Pengaman: kalau teks kepanjangan, potong di akhir kalimat terdekat
+              di bawah batas -- supaya tidak berisiko ditolak situs generator gambar
+              karena melewati limit panjang yang tidak kita ketahui pasti."""
+              text = (text or "").strip()
+              if len(text) <= max_len:
+                  return text
+              cut = text[:max_len]
+              last_period = cut.rfind(". ")
+              return cut[:last_period + 1] if last_period > max_len * 0.6 else cut
+
+          metadata["thumbnail_prompt"] = clamp_text(metadata.get("thumbnail_prompt", ""), 2600)
+
+          print(f"Judul       : {metadata.get('youtube_title','')}")
+          print(f"Tags        : {len(metadata.get('youtube_tags', []))} tags")
+          print(f"Thumbnail   : {len(metadata.get('thumbnail_prompt',''))} karakter\n")
+
           final_analysis = {
-              "summary": " | ".join(summary_parts),
-              "segments": combined_segments
+              "summary": combined_summary,
+              "segments": combined_segments,
+              "youtube_title": metadata.get("youtube_title", ""),
+              "youtube_description": metadata.get("youtube_description", ""),
+              "youtube_tags": metadata.get("youtube_tags", []),
+              "thumbnail_prompt": metadata.get("thumbnail_prompt", "")
           }
 
           os.makedirs("release", exist_ok=True)
@@ -570,21 +687,20 @@ jobs:
           cat > generate-images.js <<'EOF'
           const { chromium } = require("playwright");
           const fs = require("fs");
+          const sharp = require("sharp");
 
           const analysis = JSON.parse(
               fs.readFileSync("release/analysis.json", "utf8")
           );
           const segments = analysis.segments;
           const MAX_WORKERS = 5;
-          const COOLDOWN_EVERY = 30;     // istirahat tiap N gambar selesai
-          const COOLDOWN_MS = 45000;     // 45 detik, hindari overload freegen.app
+          const COOLDOWN_EVERY = 30;
+          const COOLDOWN_MS = 45000;
 
           fs.mkdirSync("release/images", { recursive: true });
 
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-          // --- Shared cooldown gate: worker mana pun yang sedang berjalan akan
-          // ikut menunggu kalau ada worker lain yang baru memicu cooldown ---
           let completedCount = 0;
           let cooldownPromise = null;
 
@@ -601,18 +717,62 @@ jobs:
               }
           }
 
-          async function generate(page, segment, index) {
-              console.log(`\nGenerating ${index+1}/${segments.length}`);
-              console.log(`${segment.start} -> ${segment.end}`);
-              
+          async function generateThumbnailUpsampler(page, prompt, outPath) {
+              for (let retry = 1; retry <= 3; retry++) {
+                  try {
+                      await page.goto("https://upsampler.com/free-image-generator-no-signup", {
+                          waitUntil: "domcontentloaded"
+                      });
+                      await page.waitForLoadState("networkidle").catch(() => {});
+
+                      await page.locator("#aspect-ratio").click();
+                      await page.getByRole("option", { name: /16:9/i }).first().click();
+
+                      await page.locator("#prompt-input").fill(prompt);
+
+                      const generateBtn = page.getByRole("button", { name: "Generate Image" });
+                      await generateBtn.waitFor({ state: "visible" });
+                      await generateBtn.click();
+
+                      const resultImg = page.locator('img[alt="generated image"]');
+                      await resultImg.waitFor({ state: "visible", timeout: 120000 });
+
+                      const newImgSrc = await resultImg.getAttribute("src");
+                      if (!newImgSrc) throw new Error("src gambar hasil kosong");
+
+                      const resp = await page.request.get(newImgSrc);
+                      const rawBuffer = await resp.body();
+                      const jpegBuffer = await sharp(rawBuffer).jpeg({ quality: 92 }).toBuffer();
+                      fs.writeFileSync(outPath, jpegBuffer);
+
+                      console.log("✓", outPath, "(upsampler.com)");
+                      return true;
+                  } catch (err) {
+                      console.log(`[Upsampler] Retry ${retry}: ${err.message}`);
+                      if (retry === 3) {
+                          try {
+                              await page.screenshot({ path: outPath.replace(/\.jpg$/, ".upsampler-debug.png"), fullPage: true });
+                              const bodyText = await page.locator("body").innerText().catch(() => "(gagal ambil teks halaman)");
+                              fs.writeFileSync(outPath.replace(/\.jpg$/, ".upsampler-debug.txt"), bodyText.slice(0, 3000));
+                          } catch (debugErr) {
+                              console.log("Gagal ambil screenshot debug:", debugErr.message);
+                          }
+                      }
+                  }
+              }
+              return false;
+          }
+
+          async function generate(page, prompt, outPath) {
               for (let retry = 1; retry <= 3; retry++) {
                   try {
                       await page.goto("https://freegen.app/", {
                           waitUntil: "domcontentloaded"
                       });
+                      await page.waitForLoadState("networkidle").catch(() => {});
                       
                       await page.selectOption("#aspectRatioSelect", "16:9");
-                      await page.fill("#prompt", segment.image_prompt);
+                      await page.fill("#prompt", prompt);
                       await page.keyboard.press("Enter");
                       
                       const imageContainer = page.locator("#imageContainer");
@@ -622,21 +782,29 @@ jobs:
                       const src = await img.getAttribute("src");
                       const base64 = src.replace(/^data:image\/[a-z]+;base64,/, "");
                       
-                      const out = `release/images/${String(index+1).padStart(3, "0")}.jpg`;
-                      fs.writeFileSync(out, base64, "base64");
+                      fs.writeFileSync(outPath, base64, "base64");
                       
-                      console.log("✓", out);
-                      return;
+                      console.log("✓", outPath);
+                      return true;
                   } catch (err) {
                       console.log(`Retry ${retry}: ${err.message}`);
                       if (retry === 3) {
+                          try {
+                              await page.screenshot({ path: outPath.replace(/\.jpg$/, ".debug.png"), fullPage: true });
+                              const bodyText = await page.locator("body").innerText().catch(() => "(gagal ambil teks halaman)");
+                              fs.writeFileSync(outPath.replace(/\.jpg$/, ".debug.txt"), bodyText.slice(0, 3000));
+                          } catch (debugErr) {
+                              console.log("Gagal ambil screenshot debug:", debugErr.message);
+                          }
                           fs.writeFileSync(
-                              `release/images/${String(index+1).padStart(3, "0")}.error.txt`,
+                              outPath.replace(/\.jpg$/, ".error.txt"),
                               err.stack
                           );
+                          return false;
                       }
                   }
               }
+              return false;
           }
 
           async function worker(id, browser, queue) {
@@ -644,30 +812,65 @@ jobs:
               while (true) {
                   const index = queue.shift();
                   if (index === undefined) break;
-                  console.log(`Worker ${id} -> ${index+1}`);
-                  await generate(page, segments[index], index);
+                  console.log(`\nWorker ${id} -> segmen ${index+1}/${segments.length}`);
+                  console.log(`${segments[index].start} -> ${segments[index].end}`);
+                  const outPath = `release/images/${String(index+1).padStart(3, "0")}.jpg`;
+                  await generate(page, segments[index].image_prompt, outPath);
                   await maybeCooldown();
               }
               await page.close();
           }
 
           (async () => {
-              const queue = Array.from({ length: segments.length }, (_, i) => i);
-              
               console.log("\n==============================");
               console.log("IMAGE GENERATOR");
               console.log("==============================");
               console.log(`Workers  : ${MAX_WORKERS}`);
               console.log(`Segments : ${segments.length}`);
               console.log(`Cooldown : ${COOLDOWN_MS / 1000}s tiap ${COOLDOWN_EVERY} gambar`);
-              
+
               const browser = await chromium.launch({ headless: true });
+
+              if (analysis.thumbnail_prompt) {
+                  console.log("\n--- Generating THUMBNAIL (prioritas pertama, via upsampler.com) ---");
+                  const thumbPage = await browser.newPage();
+                  let ok = await generateThumbnailUpsampler(thumbPage, analysis.thumbnail_prompt, "release/thumbnail.jpg");
+                  if (!ok) {
+                      console.log("⚠️ upsampler.com gagal, coba fallback ke freegen.app untuk thumbnail...");
+                      ok = await generate(thumbPage, analysis.thumbnail_prompt, "release/thumbnail.jpg");
+                  }
+                  await thumbPage.close();
+                  if (ok) {
+                      console.log("✓ Thumbnail berhasil dibuat\n");
+                  } else {
+                      console.log("⚠️ Thumbnail gagal dibuat dari upsampler.com maupun freegen.app.");
+                      console.log("   Cek release/thumbnail.upsampler-debug.png/.txt dan release/thumbnail.debug.png/.txt untuk diagnosis.");
+                      console.log("   Akan dipakai gambar segmen pertama yang sukses sebagai fallback.\n");
+                  }
+              } else {
+                  console.log("\n⚠️ Tidak ada thumbnail_prompt di analysis.json, skip pembuatan thumbnail.\n");
+              }
+
+              const queue = Array.from({ length: segments.length }, (_, i) => i);
               await Promise.all(
                   Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
                       worker(i + 1, browser, queue)
                   )
               );
               await browser.close();
+
+              if (!fs.existsSync("release/thumbnail.jpg")) {
+                  const firstAvailable = fs.existsSync("release/images")
+                      ? fs.readdirSync("release/images").filter(f => f.endsWith(".jpg")).sort()[0]
+                      : null;
+                  if (firstAvailable) {
+                      fs.copyFileSync(`release/images/${firstAvailable}`, "release/thumbnail.jpg");
+                      console.log(`\n✓ Thumbnail fallback dipakai dari segmen ${firstAvailable} (thumbnail custom gagal dibuat).`);
+                  } else {
+                      console.log("\n⚠️ Tidak ada gambar sama sekali untuk dipakai sebagai fallback thumbnail.");
+                  }
+              }
+
               console.log("\nDONE");
           })();
           EOF
@@ -684,13 +887,6 @@ jobs:
           print(" CONVERTING IMAGES & AUDIO TO 16:9 WIDESCREEN VIDEO ")
           print("="*70 + "\n")
 
-          # ============================================================
-          # Seluruh proses ffmpeg dibungkus try/except. Kalau ada yang
-          # gagal di tengah jalan (ffmpeg tidak ada, segmen rusak, dll),
-          # script TIDAK exit(1) -- supaya step berikutnya (zip images &
-          # publish release) tetap jalan dengan asset yang sudah ada
-          # (output/audio.wav, release/analysis.json, release/images.zip).
-          # ============================================================
           try:
               if shutil.which("ffmpeg") is None:
                   raise RuntimeError("ffmpeg tidak ditemukan di PATH. Cek step 'Install FFmpeg'.")
@@ -700,7 +896,6 @@ jobs:
 
               segments = analysis["segments"]
 
-              # Mapping nama transition_effect kita -> nama transition bawaan filter xfade ffmpeg
               TRANSITION_MAP = {
                   "fade": "fadeblack",
                   "crossfade": "fade",
@@ -751,18 +946,10 @@ jobs:
               reused_count = 0
 
               for i, seg in enumerate(segments):
-                  # PERBAIKAN: Menggunakan .zfill(3) khas Python, bukan .padStart()
                   idx_str = str(i+1).zfill(3)
                   img_path = f"release/images/{idx_str}.jpg"
                   duration = float(seg.get("duration", 5.0))
 
-                  # ============================================================
-                  # PERBAIKAN UTAMA: kalau gambar untuk segmen ini gagal dibuat,
-                  # JANGAN di-skip (itu yang menyebabkan semua segmen sesudahnya
-                  # bergeser maju / "posisi waktu tidak pas" dengan audio asli).
-                  # Pakai gambar sukses terakhir sebagai fallback, supaya durasi &
-                  # posisi segmen ini di timeline tetap terjaga.
-                  # ============================================================
                   if not os.path.exists(img_path):
                       if last_good_image:
                           print(f"⚠️ Gambar {idx_str} tidak ditemukan, pakai gambar segmen sebelumnya (durasi tetap terjaga).")
@@ -812,10 +999,6 @@ jobs:
               if len(clips) == 1:
                   shutil.copy(clips[0]["path"], "release/visual_only.mp4")
               else:
-                  # ============================================================
-                  # Pakai filter xfade berantai supaya transisi (fade/wipe/slide/dll)
-                  # benar-benar diterapkan sesuai data di analysis.json.
-                  # ============================================================
                   inputs_args = []
                   for c in clips:
                       inputs_args += ["-i", c["path"]]
@@ -824,8 +1007,6 @@ jobs:
                   cum_dur = clips[0]["duration"]
                   prev_label = "0:v"
                   for i in range(1, len(clips)):
-                      # Transisi diambil dari klip SEBELUM batas ini (klip ke-i, 0-indexed i-1)
-                      # -> ini transisi yang terjadi saat klip itu berakhir menuju klip berikutnya
                       trans_effect = clips[i - 1]["transition_effect"]
                       d = clips[i - 1]["transition_duration"]
                       ttype = TRANSITION_MAP.get(trans_effect, "fade")
@@ -849,15 +1030,6 @@ jobs:
                   if result.returncode != 0 or not os.path.exists("release/visual_only.mp4"):
                       raise RuntimeError(f"Gagal membuat transisi xfade: {result.stderr.decode(errors='ignore')[:500]}")
 
-              # ============================================================
-              # PERBAIKAN UTAMA: TIDAK pakai -shortest lagi. Durasi segmen di
-              # analysis.json sudah dihitung real-time dari durasi audio asli,
-              # jadi durasi video akhir WAJIB sama dengan audio -- bukan dipotong
-              # ke salah satu stream yang lebih pendek. Kalau visual_only.mp4
-              # sedikit lebih pendek dari audio (wajar, karena overlap xfade),
-              # kita extend dengan freeze-frame terakhir. Kalau lebih panjang,
-              # baru kita potong pas di durasi audio.
-              # ============================================================
               with wave.open("output/audio.wav", "rb") as wf:
                   audio_duration = wf.getnframes() / float(wf.getframerate())
 
@@ -909,12 +1081,9 @@ jobs:
               print("Asset yang tetap akan dipublish ke release: output/audio.wav, release/analysis.json, release/images.zip")
               print("="*70)
 
-          # Sengaja TIDAK exit(1) di sini -- supaya step zip images & publish release tetap berjalan
-          # walau pembuatan video gagal total.
           sys.exit(0)
           PYEOF
 
-          
       - name: Create Artifacts Images
         if: always()
         run: |
@@ -922,6 +1091,119 @@ jobs:
           cd release
           zip -r images.zip images/ || echo "Tidak ada gambar untuk di-zip, lanjut tanpa images.zip"
           cd ..
+
+      - name: Upload Video to YouTube
+        if: always()
+        continue-on-error: true
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_PRIVACY: ${{ github.event.inputs.youtube_privacy }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, sys
+
+          try:
+              VIDEO_PATH = "output/final_project_video.mp4"
+              THUMBNAIL_PATH = "release/thumbnail.jpg"
+              ANALYSIS_PATH = "release/analysis.json"
+
+              if not os.path.exists(VIDEO_PATH):
+                  print("⚠️ output/final_project_video.mp4 tidak ada, skip upload ke YouTube.")
+                  sys.exit(0)
+
+              required_secrets = ["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"]
+              missing = [s for s in required_secrets if not os.environ.get(s)]
+              if missing:
+                  print(f"⚠️ Secret belum diset: {', '.join(missing)}. Skip upload ke YouTube.")
+                  print("Lihat panduan setup OAuth YouTube di pesan chat untuk cara mendapatkannya.")
+                  sys.exit(0)
+
+              from google.oauth2.credentials import Credentials
+              from googleapiclient.discovery import build
+              from googleapiclient.http import MediaFileUpload
+
+              with open(ANALYSIS_PATH, "r", encoding="utf8") as f:
+                  analysis = json.load(f)
+
+              title = (analysis.get("youtube_title") or "Psychological Narrative").strip()[:100]
+              description = analysis.get("youtube_description") or ""
+              tags = analysis.get("youtube_tags") or []
+              privacy_status = os.environ.get("YOUTUBE_PRIVACY") or "private"
+
+              print("\n" + "="*70)
+              print(" UPLOAD VIDEO KE YOUTUBE ")
+              print("="*70)
+              print(f"Judul     : {title}")
+              print(f"Privacy   : {privacy_status}")
+              print(f"Tags      : {len(tags)} tags\n")
+
+              creds = Credentials(
+                  token=None,
+                  refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
+                  client_id=os.environ["YOUTUBE_CLIENT_ID"],
+                  client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
+                  token_uri="https://oauth2.googleapis.com/token",
+                  scopes=["https://www.googleapis.com/auth/youtube.upload"],
+              )
+
+              youtube = build("youtube", "v3", credentials=creds)
+
+              body = {
+                  "snippet": {
+                      "title": title,
+                      "description": description,
+                      "tags": tags,
+                      "categoryId": "27",  # Education -- ganti sesuai kebutuhan
+                  },
+                  "status": {
+                      "privacyStatus": privacy_status,
+                      "selfDeclaredMadeForKids": False,
+                  },
+              }
+
+              media = MediaFileUpload(VIDEO_PATH, chunksize=-1, resumable=True, mimetype="video/mp4")
+              request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+              response = None
+              while response is None:
+                  status, response = request.next_chunk()
+                  if status:
+                      print(f"  Upload progress: {int(status.progress() * 100)}%")
+
+              video_id = response["id"]
+              print(f"\n✓ Video berhasil diupload. Video ID: {video_id}")
+              print(f"  URL: https://youtu.be/{video_id}")
+
+              if os.path.exists(THUMBNAIL_PATH):
+                  print("\nMengatur thumbnail...")
+                  try:
+                      youtube.thumbnails().set(
+                          videoId=video_id,
+                          media_body=MediaFileUpload(THUMBNAIL_PATH, mimetype="image/jpeg")
+                      ).execute()
+                      print("✓ Thumbnail berhasil diset.")
+                  except Exception as e:
+                      print(f"⚠️ Video tetap terupload, tapi gagal set thumbnail: {e}")
+              else:
+                  print("⚠️ release/thumbnail.jpg tidak ditemukan, skip set thumbnail.")
+
+              with open("release/youtube_video_id.txt", "w", encoding="utf8") as f:
+                  f.write(f"https://youtu.be/{video_id}\n")
+
+              print("\n" + "="*70)
+              print("✓ UPLOAD YOUTUBE SELESAI")
+              print("="*70)
+
+          except Exception as e:
+              print("\n" + "="*70)
+              print(f"⚠️ GAGAL upload ke YouTube: {e}")
+              print("Pipeline tetap dilanjutkan, asset lain tetap dipublish ke release.")
+              print("="*70)
+
+          sys.exit(0)
+          PYEOF
 
       - name: Publish Release Assets
         if: always()
@@ -938,5 +1220,7 @@ jobs:
             output/final_project_video.mp4
             release/analysis.json
             release/images.zip
+            release/thumbnail.jpg
+            release/youtube_video_id.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
