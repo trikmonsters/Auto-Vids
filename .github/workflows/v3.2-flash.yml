@@ -1,4 +1,4 @@
-name: Project Video AI
+name: Video AI V3.2 Flash
 
 on:
   workflow_dispatch:
@@ -72,7 +72,7 @@ jobs:
       - name: Setup Node.js and Install Dependencies
         run: |
           npm init -y
-          npm install playwright sharp
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth sharp
           npx playwright install chromium
 
       - name: Install FFmpeg
@@ -87,89 +87,146 @@ jobs:
 
       - name: Generate script with Elite Narrative Design
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOPIC_INPUT: ${{ github.event.inputs.topic }}
           LANGUAGE: ${{ github.event.inputs.language }}
         run: |
-          SYSTEM_PROMPT="You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away. CRITICAL ENGAGEMENT MANDATE: 1. THE CEREBRAL HOOK: Every single paragraph must begin with a 'psychological hook'—a provocative, counter-intuitive, or startling observation about the human mind that immediately demands resolution in the next sentences. Never start with a generic question. Start with a cold, piercing insight. 2. NARRATIVE DENSITY: Every paragraph must be a dense, heavy block of text (minimum 4-6 long, complex sentences). No bullet points, no short lines, no white space between paragraphs. The text should feel like a relentless stream of consciousness. 3. ATMOSPHERIC PSYCHOLOGY: Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. 4. ABSOLUTE PROHIBITIONS: No 'In summary', 'In conclusion', 'It is important to remember', or 'Human behavior is complex'. No archetypal characters (no 'John' or 'Mary'). No generic advice. 5. THE TWIST: The narrative must escalate from a relatable psychological premise into a surreal, existential realization that leaves the reader questioning the architecture of their own mind. 6. OUTPUT LANGUAGE: Write the entire narrative in fluent, native-level $LANGUAGE. Every word, idiom, and turn of phrase must read as if written by a literary native speaker of $LANGUAGE -- never a translation."
+          cat > generate-script.js << 'JSEOF'
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth')();
+          chromium.use(stealth);
+          const fs = require('fs');
 
-          USER_PROMPT="Write a 1500+ word, highly immersive psychological narrative on the topic: '$TOPIC_INPUT'. Structure: - Every paragraph MUST begin with an aggressive, hook-driven insight. - Maintain a cold, cinematic, and sophisticated tone. - Ensure the narrative deepens into existential dread or profound discovery. - Use dense, academic-poetic language. Write the entire narrative in fluent, native-level $LANGUAGE."
+          const TOPIC = process.env.TOPIC_INPUT || '';
+          const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
+          const MIN_WORDS = 1600;
+          const MAX_ATTEMPTS = 3;
 
-          MAX_RETRIES=5
-          SUCCESS=false
+          const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away.
 
-          echo "Topic     : $TOPIC_INPUT"
-          echo "Language  : $LANGUAGE"
-          echo "Model     : openrouter/owl-alpha"
-          echo ""
+          STRICT RULES:
+          1. Every paragraph begins with a cold, piercing psychological insight — NOT a generic question.
+          2. Every paragraph is 4-6 long, fully developed sentences minimum. Dense blocks of text. No bullet points. No short lines.
+          3. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors.
+          4. PROHIBITED: "In summary", "In conclusion", "It is important to remember", "Human behavior is complex". No named characters (no "John", "Maria"). No generic advice.
+          5. The narrative must escalate from a relatable psychological premise into a surreal, existential realization that leaves the reader questioning the architecture of their own mind.
+          6. Write the ENTIRE narrative in fluent, native-level ${LANGUAGE}. Every word must read as if written by a literary native speaker — never a translation.
 
-          for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "========================================="
-            echo "[Attempt $attempt/$MAX_RETRIES] Calling OpenRouter..."
-            echo "========================================="
+          Now write a 1500+ word, highly immersive psychological narrative on this topic: "${TOPIC}"
 
-            HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" --max-time 120 \
-              https://openrouter.ai/api/v1/chat/completions \
-              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n \
-                --arg model "openrouter/owl-alpha" \
-                --arg sp "$SYSTEM_PROMPT" \
-                --arg up "$USER_PROMPT" \
-                '{
-                  model: $model,
-                  messages: [{role: "system", content: $sp}, {role: "user", content: $up}],
-                  temperature: 0.7,
-                  max_tokens: 4000,
-                  presence_penalty: 0.8,
-                  frequency_penalty: 0.7
-                }')")
+          Structure:
+          - Every paragraph MUST begin with an aggressive, hook-driven insight.
+          - Cold, cinematic, sophisticated tone throughout.
+          - Narrative deepens into existential dread or profound discovery.
+          - Dense academic-poetic language.
+          - Write the entire narrative in fluent, native-level ${LANGUAGE}.
+          - Output ONLY the narrative text. No title, no preamble, no "Here is your narrative:" — start directly with the first word of the story.`;
 
-            STORY_TEXT=$(jq -r '.choices[0].message.content // empty' response.json 2>/dev/null)
-            ERROR_MSG=$(jq -r '.error.message // empty' response.json 2>/dev/null)
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-            if [ "$HTTP_CODE" = "200" ] && [ -n "$STORY_TEXT" ]; then
-              printf '%s' "$STORY_TEXT" > tts-script.txt
-              WORD_COUNT=$(wc -w < tts-script.txt)
-              echo "✓ Narrative generated successfully ($WORD_COUNT words)"
-              SUCCESS=true
-              break
-            else
-              echo "Failed (HTTP $HTTP_CODE). Error: ${ERROR_MSG:-Unknown / empty response}"
-              echo "Raw response (truncated):"
-              head -c 300 response.json
-              echo ""
+          async function tryGenerate(attempt) {
+            console.log(`\n[Attempt ${attempt}/${MAX_ATTEMPTS}] Launching browser...`);
+            const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+            const context = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              viewport: { width: 1280, height: 720 },
+              locale: 'en-US',
+            });
+            const page = await context.newPage();
 
-              if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-                if [ "$HTTP_CODE" = "429" ]; then
-                  WAIT=$((60 * attempt))
-                else
-                  WAIT=$((15 * attempt))
-                fi
-                echo "Menunggu ${WAIT}s sebelum retry..."
-                sleep "$WAIT"
-              fi
-            fi
-          done
+            try {
+              console.log('Navigating to ChatGPT...');
+              await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle', timeout: 60000 });
 
-          if [ "$SUCCESS" != "true" ]; then
-            echo "::error::Gagal generate narasi dari OpenRouter (owl-alpha) setelah $MAX_RETRIES percobaan."
-            exit 1
-          fi
+              const inputSelector = '#prompt-textarea';
+              await page.waitForSelector(inputSelector, { timeout: 40000 });
+              console.log('Input ready. Filling prompt...');
+
+              await page.click(inputSelector);
+              await page.evaluate((text) => {
+                const el = document.querySelector('#prompt-textarea');
+                el.focus();
+                document.execCommand('insertText', false, text);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+              }, FULL_PROMPT);
+
+              await sleep(1500);
+
+              const sendBtn = page.locator('button[data-testid="send-button"]');
+              await sendBtn.waitFor({ state: 'visible', timeout: 10000 });
+              await sendBtn.click();
+              console.log('Prompt sent. Waiting for response...');
+
+              await page.waitForSelector('[data-testid="stop-button"]', { timeout: 30000 }).catch(() => {});
+
+              console.log('Response generating, waiting for completion...');
+              await page.waitForFunction(
+                () => !document.querySelector('[data-testid="stop-button"]'),
+                { timeout: 300000, polling: 2000 }
+              );
+
+              await sleep(2000);
+
+              const responseBlocks = await page.locator('[data-message-author-role="assistant"] .markdown').all();
+              if (responseBlocks.length === 0) {
+                throw new Error('No response blocks found after generation completed');
+              }
+
+              const lastBlock = responseBlocks[responseBlocks.length - 1];
+              const text = await lastBlock.innerText();
+
+              const wordCount = text.trim().split(/\s+/).length;
+              console.log(`Response received: ${wordCount} words`);
+
+              if (wordCount < MIN_WORDS) {
+                throw new Error(`Response too short: ${wordCount} words (minimum ${MIN_WORDS})`);
+              }
+
+              return text.trim();
+
+            } finally {
+              await browser.close();
+            }
+          }
+
+          (async () => {
+            console.log('='.repeat(60));
+            console.log(' GENERATE NARRATIVE VIA CHATGPT ');
+            console.log('='.repeat(60));
+            console.log(`Topic    : ${TOPIC}`);
+            console.log(`Language : ${LANGUAGE}`);
+
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              try {
+                const narrative = await tryGenerate(attempt);
+                fs.writeFileSync('tts-script.txt', narrative, 'utf8');
+                const wc = narrative.split(/\s+/).length;
+                console.log('\n' + '='.repeat(60));
+                console.log(`✓ Narrative saved: ${wc} words`);
+                console.log('='.repeat(60));
+                console.log('\n--- PREVIEW (first 300 chars) ---');
+                console.log(narrative.slice(0, 300) + '...');
+                process.exit(0);
+              } catch (err) {
+                console.error(`Attempt ${attempt} failed: ${err.message}`);
+                if (attempt < MAX_ATTEMPTS) {
+                  const wait = 20 * attempt;
+                  console.log(`Waiting ${wait}s before retry...`);
+                  await sleep(wait * 1000);
+                }
+              }
+            }
+
+            console.error(`::error::Gagal generate narasi setelah ${MAX_ATTEMPTS} percobaan.`);
+            process.exit(1);
+          })();
+          JSEOF
+
+          node generate-script.js
 
           echo "========================================="
-          echo "GENERATED NARRATIVE SCRIPT"
+          echo "Check Script Analytics"
+          echo "Generated Words : $(wc -w < tts-script.txt)"
           echo "========================================="
-          cat tts-script.txt
-          echo "========================================="
-          echo "END OF SCRIPT"
-          echo "========================================="
-
-      - name: Check Script Analytics
-        run: |
-          echo "========================================="
-          echo "Generated Characters : $(wc -m < tts-script.txt)"
-          echo "Generated Words      : $(wc -w < tts-script.txt)"
           echo "========================================="
 
       - name: Generate TTS Audio
