@@ -156,12 +156,12 @@ jobs:
               await sendBtn.click();
               console.log('Prompt sent. Waiting for response...');
 
-              await page.waitForSelector('[data-testid="stop-button"]', { timeout: 30000 }).catch(() => {});
+              await page.waitForSelector('[data-testid="stop-button"]', { timeout: 130000 }).catch(() => {});
 
               console.log('Response generating, waiting for completion...');
               await page.waitForFunction(
                 () => !document.querySelector('[data-testid="stop-button"]'),
-                { timeout: 300000, polling: 2000 }
+                { timeout: 900000, polling: 2000 }
               );
 
               await sleep(2000);
