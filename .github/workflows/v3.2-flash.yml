@@ -1,4 +1,4 @@
-name: Video AI V3.2 Flash
+name: Vids V3.2 Flash
 
 on:
   workflow_dispatch:
@@ -98,7 +98,7 @@ jobs:
 
           const TOPIC = process.env.TOPIC_INPUT || '';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 1200;
+          const MIN_WORDS = 1400;
           const MAX_ATTEMPTS = 3;
 
           const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away.
@@ -107,81 +107,107 @@ jobs:
           1. Every paragraph begins with a cold, piercing psychological insight — NOT a generic question.
           2. Every paragraph is 4-6 long, fully developed sentences minimum. Dense blocks of text. No bullet points. No short lines.
           3. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors.
-          4. PROHIBITED: "In summary", "In conclusion", "It is important to remember", "Human behavior is complex". No named characters (no "John", "Maria"). No generic advice.
-          5. The narrative must escalate from a relatable psychological premise into a surreal, existential realization that leaves the reader questioning the architecture of their own mind.
-          6. Write the ENTIRE narrative in fluent, native-level ${LANGUAGE}. Every word must read as if written by a literary native speaker — never a translation.
-
+          4. PROHIBITED: "In summary", "In conclusion", "It is important to remember", "Human behavior is complex". No named characters. No generic advice.
+          5. The narrative must escalate from a relatable psychological premise into a surreal, existential realization.
+          6. Write the ENTIRE narrative in fluent, native-level ${LANGUAGE}. Every word must read as if written by a literary native speaker.
+          
           Now write a 1700+ word, highly immersive psychological narrative on this topic: "${TOPIC}"
-
-          Structure:
+          
           - Every paragraph MUST begin with an aggressive, hook-driven insight.
           - Cold, cinematic, sophisticated tone throughout.
           - Narrative deepens into existential dread or profound discovery.
           - Dense academic-poetic language.
-          - Write the entire narrative in fluent, native-level ${LANGUAGE}.
-          - Output ONLY the narrative text. No title, no preamble, no "Here is your narrative:" — start directly with the first word of the story.`;
+          - Output ONLY the narrative text. No title, no preamble — start directly with the first word of the story.`;
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
 
           async function tryGenerate(attempt) {
             console.log(`\n[Attempt ${attempt}/${MAX_ATTEMPTS}] Launching browser...`);
-            const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+            const browser = await chromium.launch({
+              headless: true,
+              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+            });
             const context = await browser.newContext({
-              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              viewport: { width: 1280, height: 720 },
-              locale: 'en-US',
+              viewport: { width: 1280, height: 1000 },
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              locale: 'id-ID'
             });
             const page = await context.newPage();
 
             try {
-              console.log('Navigating to ChatGPT...');
-              await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle', timeout: 60000 });
+              console.log('Navigating to Google AI Mode...');
+              await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle', timeout: 60000 });
 
-              const inputSelector = '#prompt-textarea';
-              await page.waitForSelector(inputSelector, { timeout: 40000 });
+              const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder*="Tanyakan"], textarea[placeholder*="Ask"], textarea[aria-label*="Search"]').first();
+              await chatInput.waitFor({ state: 'visible', timeout: 30000 });
               console.log('Input ready. Filling prompt...');
 
-              await page.click(inputSelector);
-              await page.evaluate((text) => {
-                const el = document.querySelector('#prompt-textarea');
-                el.focus();
-                document.execCommand('insertText', false, text);
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-              }, FULL_PROMPT);
-
-              await sleep(1500);
-
-              const sendBtn = page.locator('button[data-testid="send-button"]');
-              await sendBtn.waitFor({ state: 'visible', timeout: 10000 });
-              await sendBtn.click();
+              await chatInput.fill(FULL_PROMPT);
+              await chatInput.press('Enter');
               console.log('Prompt sent. Waiting for response...');
 
-              await page.waitForSelector('[data-testid="stop-button"]', { timeout: 130000 }).catch(() => {});
+              await sleep(5000);
 
-              console.log('Response generating, waiting for completion...');
-              await page.waitForFunction(
-                () => !document.querySelector('[data-testid="stop-button"]'),
-                { timeout: 900000, polling: 2000 }
-              );
+              console.log('Polling for full response (max 5 minutes)...');
+              const startTime = Date.now();
+              const TIMEOUT = 300000;
+              let lastLength = 0;
+              let stableCount = 0;
 
-              await sleep(2000);
+              while (Date.now() - startTime < TIMEOUT) {
+                const bodyText = await page.evaluate(() => document.body.innerText);
+                const currentLength = bodyText.length;
 
-              const responseBlocks = await page.locator('[data-message-author-role="assistant"] .markdown').all();
-              if (responseBlocks.length === 0) {
-                throw new Error('No response blocks found after generation completed');
+                if (currentLength === lastLength) {
+                  stableCount++;
+                  if (stableCount >= 6) {
+                    console.log('Response appears stable (no new text for 12s).');
+                    break;
+                  }
+                } else {
+                  stableCount = 0;
+                  lastLength = currentLength;
+                }
+
+                await sleep(2000);
               }
 
-              const lastBlock = responseBlocks[responseBlocks.length - 1];
-              const text = await lastBlock.innerText();
+              const responseBlocks = await page.locator('[data-attrid], .LLtSOc, .mod, .kno-rdesc, .BNeawe').all();
+              let responseText = '';
 
-              const wordCount = text.trim().split(/\s+/).length;
-              console.log(`Response received: ${wordCount} words`);
+              const candidates = [
+                '[data-message-author-role="model"] .markdown',
+                '.AI-response-container',
+                '.response-container',
+                'div[jsname] p',
+              ];
+
+              for (const sel of candidates) {
+                const els = await page.locator(sel).all();
+                if (els.length > 0) {
+                  const texts = await Promise.all(els.map(e => e.innerText()));
+                  const joined = texts.join('\n\n').trim();
+                  if (joined.length > responseText.length) responseText = joined;
+                }
+              }
+
+              if (!responseText || responseText.split(/\s+/).length < MIN_WORDS) {
+                const bodyText = await page.evaluate(() => document.body.innerText);
+                const promptIndex = bodyText.indexOf(TOPIC.slice(0, 40));
+                if (promptIndex !== -1) {
+                  responseText = bodyText.slice(promptIndex + TOPIC.length).trim();
+                }
+              }
+
+              const wordCount = responseText.trim().split(/\s+/).length;
+              console.log(`Response captured: ${wordCount} words`);
 
               if (wordCount < MIN_WORDS) {
-                throw new Error(`Response too short: ${wordCount} words (minimum ${MIN_WORDS})`);
+                await page.screenshot({ path: 'debug-aimode.png', fullPage: true });
+                throw new Error(`Response too short: ${wordCount} words (minimum ${MIN_WORDS}). Screenshot saved.`);
               }
 
-              return text.trim();
+              return responseText.trim();
 
             } finally {
               await browser.close();
@@ -190,7 +216,7 @@ jobs:
 
           (async () => {
             console.log('='.repeat(60));
-            console.log(' GENERATE NARRATIVE VIA CHATGPT ');
+            console.log(' GENERATE NARRATIVE VIA GOOGLE AI MODE ');
             console.log('='.repeat(60));
             console.log(`Topic    : ${TOPIC}`);
             console.log(`Language : ${LANGUAGE}`);
@@ -201,7 +227,7 @@ jobs:
                 fs.writeFileSync('tts-script.txt', narrative, 'utf8');
                 const wc = narrative.split(/\s+/).length;
                 console.log('\n' + '='.repeat(60));
-                console.log(`✓ Narrative saved: ${wc} words`);
+                console.log(`✓ Narrative saved to tts-script.txt: ${wc} words`);
                 console.log('='.repeat(60));
                 console.log('\n--- PREVIEW (first 300 chars) ---');
                 console.log(narrative.slice(0, 300) + '...');
@@ -224,7 +250,6 @@ jobs:
           node generate-script.js
 
           echo "========================================="
-          echo "Check Script Analytics"
           echo "Generated Words : $(wc -w < tts-script.txt)"
           echo "========================================="
           echo "========================================="
