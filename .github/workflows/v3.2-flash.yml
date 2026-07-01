@@ -98,7 +98,7 @@ jobs:
 
           const TOPIC = process.env.TOPIC_INPUT || '';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 1600;
+          const MIN_WORDS = 1200;
           const MAX_ATTEMPTS = 3;
 
           const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away.
@@ -111,7 +111,7 @@ jobs:
           5. The narrative must escalate from a relatable psychological premise into a surreal, existential realization that leaves the reader questioning the architecture of their own mind.
           6. Write the ENTIRE narrative in fluent, native-level ${LANGUAGE}. Every word must read as if written by a literary native speaker — never a translation.
 
-          Now write a 1500+ word, highly immersive psychological narrative on this topic: "${TOPIC}"
+          Now write a 1700+ word, highly immersive psychological narrative on this topic: "${TOPIC}"
 
           Structure:
           - Every paragraph MUST begin with an aggressive, hook-driven insight.
