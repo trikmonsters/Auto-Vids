@@ -1034,36 +1034,26 @@ jobs:
 
               const queue = Array.from({ length: segments.length }, (_, i) => i);
 
-              await Promise.all([
-                  ...Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
-                      worker(i + 1, browser, queue)
-                  ),
-                  upsamplerWorker(browser),
-              ].map(async (p, idx, arr) => {
-                  await p;
-                  if (idx < arr.length - 1) return;
-              }));
-
+              const fallbackWorker = upsamplerWorker(browser);
+              
+              await Promise.all(
+                  Array.from(
+                      { length: Math.min(MAX_WORKERS, segments.length) },
+                      (_, i) => worker(i + 1, browser, queue)
+                  )
+              );
+              
               primaryWorkersDone = true;
-              while (failedQueue.length > 0) {
-                  await sleep(500);
-              }
-
+              
+              await fallbackWorker;
+              
               await browser.close();
-
-              if (!fs.existsSync("release/thumbnail.jpg")) {
-                  const firstAvailable = fs.existsSync("release/images")
-                      ? fs.readdirSync("release/images").filter(f => f.endsWith(".jpg")).sort()[0]
-                      : null;
-                  if (firstAvailable) {
-                      fs.copyFileSync(`release/images/${firstAvailable}`, "release/thumbnail.jpg");
-                      console.log(`\n✓ Thumbnail fallback dipakai dari segmen ${firstAvailable} (thumbnail custom gagal dibuat).`);
-                  } else {
-                      console.log("\n⚠️ Tidak ada gambar sama sekali untuk dipakai sebagai fallback thumbnail.");
-                  }
-              }
-
+              
               console.log("\nDONE");
+              
+              process.exit(0);
+              
+              })();
           })();
           EOF
           
