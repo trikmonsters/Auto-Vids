@@ -1,4 +1,4 @@
-name: Vids 3.3 Flash
+name: Project Video AI
 
 on:
   workflow_dispatch:
@@ -90,63 +90,36 @@ jobs:
           TOPIC_INPUT: ${{ github.event.inputs.topic }}
           LANGUAGE: ${{ github.event.inputs.language }}
         run: |
-          python3 << 'PYEOF'
-          import os, json
-
-          topic = os.environ.get("TOPIC_INPUT", "")
-          lang  = os.environ.get("LANGUAGE", "Indonesian")
-
-          prompt = (
-              "You are a master of psychological subversion and narrative design. "
-              "Your work functions like a cognitive trap: once the reader starts, they cannot look away.\n\n"
-              "STRICT RULES:\n"
-              "1. Every paragraph begins with a cold, piercing psychological insight - NOT a generic question.\n"
-              "2. Every paragraph is 4-6 long, fully developed sentences minimum. Dense blocks of text. No bullet points. No short lines.\n"
-              "3. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors.\n"
-              "4. PROHIBITED: 'In summary', 'In conclusion', 'It is important to remember', 'Human behavior is complex'. No named characters. No generic advice.\n"
-              "5. The narrative must escalate from a relatable psychological premise into a surreal, existential realization.\n"
-              f"6. Write the ENTIRE narrative in fluent, native-level {lang}. Every word must read as if written by a literary native speaker.\n\n"
-              f"Now write a 1500+ word, highly immersive psychological narrative on this topic: \"{topic}\"\n\n"
-              "- Every paragraph MUST begin with an aggressive, hook-driven insight.\n"
-              "- Cold, cinematic, sophisticated tone throughout.\n"
-              "- Narrative deepens into existential dread or profound discovery.\n"
-              "- Dense academic-poetic language.\n"
-              "- Output ONLY the narrative text. No title, no preamble - start directly with the first word of the story."
-          )
-
-          with open("chatgpt-prompt.txt", "w", encoding="utf-8") as f:
-              f.write(prompt)
-
-          print(f"Topic    : {topic}")
-          print(f"Language : {lang}")
-          print(f"Prompt written to chatgpt-prompt.txt ({len(prompt.split())} words in prompt)")
-          PYEOF
-
           cat > generate-script.js << 'JSEOF'
           const { chromium } = require('playwright-extra');
           const stealth = require('puppeteer-extra-plugin-stealth')();
           chromium.use(stealth);
           const fs = require('fs');
 
-          const FULL_PROMPT = fs.readFileSync('chatgpt-prompt.txt', 'utf8');
-          const MIN_WORDS   = 1400;
+          const TOPIC = process.env.TOPIC_INPUT || '';
+          const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
+          const MIN_WORDS = 1400;
           const MAX_ATTEMPTS = 3;
+
+          const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away.
+
+          STRICT RULES:
+          1. Every paragraph begins with a cold, piercing psychological insight — NOT a generic question.
+          2. Every paragraph is 4-6 long, fully developed sentences minimum. Dense blocks of text. No bullet points. No short lines.
+          3. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors.
+          4. PROHIBITED: "In summary", "In conclusion", "It is important to remember", "Human behavior is complex". No named characters. No generic advice.
+          5. The narrative must escalate from a relatable psychological premise into a surreal, existential realization.
+          6. Write the ENTIRE narrative in fluent, native-level ${LANGUAGE}. Every word must read as if written by a literary native speaker.
+
+          Now write a 1700+ word, highly immersive psychological narrative on this topic: "${TOPIC}"
+
+          - Every paragraph MUST begin with an aggressive, hook-driven insight.
+          - Cold, cinematic, sophisticated tone throughout.
+          - Narrative deepens into existential dread or profound discovery.
+          - Dense academic-poetic language.
+          - Output ONLY the narrative text. No title, no preamble — start directly with the first word of the story.`;
+
           const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-          async function waitForDone(page) {
-            await page.waitForSelector('[data-testid="stop-button"]', { timeout: 30000 }).catch(() => {});
-            await page.waitForFunction(
-              () => !document.querySelector('[data-testid="stop-button"]'),
-              { timeout: 300000, polling: 2000 }
-            );
-            await sleep(1500);
-          }
-
-          async function getLastAssistantText(page) {
-            const blocks = await page.locator('[data-message-author-role="assistant"] .markdown').all();
-            if (!blocks.length) return '';
-            return (await blocks[blocks.length - 1].innerText()).trim();
-          }
 
           async function tryGenerate(attempt) {
             console.log(`\n[Attempt ${attempt}/${MAX_ATTEMPTS}] Launching browser...`);
@@ -155,63 +128,85 @@ jobs:
               args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
             });
             const context = await browser.newContext({
-              viewport: { width: 1280, height: 900 },
-              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              locale: 'en-US'
+              viewport: { width: 1280, height: 1000 },
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              locale: 'id-ID'
             });
             const page = await context.newPage();
 
             try {
-              console.log('Navigating to ChatGPT...');
-              await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle', timeout: 60000 });
+              console.log('Navigating to Google AI Mode...');
+              await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle', timeout: 60000 });
 
-              await page.waitForSelector('#prompt-textarea', { timeout: 40000 });
+              const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder*="Tanyakan"], textarea[placeholder*="Ask"], textarea[aria-label*="Search"]').first();
+              await chatInput.waitFor({ state: 'visible', timeout: 30000 });
               console.log('Input ready. Filling prompt...');
 
-              await page.click('#prompt-textarea');
-              await page.evaluate((text) => {
-                const el = document.querySelector('#prompt-textarea');
-                el.focus();
-                document.execCommand('insertText', false, text);
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-              }, FULL_PROMPT);
+              await chatInput.fill(FULL_PROMPT);
+              await chatInput.press('Enter');
+              console.log('Prompt sent. Waiting for response...');
 
-              await sleep(1000);
-              const sendBtn = page.locator('button[data-testid="send-button"]');
-              await sendBtn.waitFor({ state: 'visible', timeout: 10000 });
-              await sendBtn.click();
-              console.log('Prompt sent, waiting for response...');
+              await sleep(5000);
 
-              await waitForDone(page);
-              let fullText = await getLastAssistantText(page);
-              console.log(`Part 1: ${fullText.split(/\s+/).length} words`);
+              console.log('Polling for full response (max 5 minutes)...');
+              const startTime = Date.now();
+              const TIMEOUT = 300000;
+              let lastLength = 0;
+              let stableCount = 0;
 
-              while (fullText.split(/\s+/).length < MIN_WORDS) {
-                console.log(`Below ${MIN_WORDS} words, sending continue...`);
-                await page.click('#prompt-textarea');
-                await page.evaluate(() => {
-                  const el = document.querySelector('#prompt-textarea');
-                  el.focus();
-                  document.execCommand('insertText', false, 'Continue writing the narrative from exactly where you left off. Do not repeat anything. Just continue seamlessly.');
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                });
-                await sleep(800);
-                await page.locator('button[data-testid="send-button"]').click();
-                await waitForDone(page);
+              while (Date.now() - startTime < TIMEOUT) {
+                const bodyText = await page.evaluate(() => document.body.innerText);
+                const currentLength = bodyText.length;
 
-                const allBlocks = await page.locator('[data-message-author-role="assistant"] .markdown').all();
-                const allTexts = await Promise.all(allBlocks.map(b => b.innerText()));
-                fullText = allTexts.join('\n\n').trim();
+                if (currentLength === lastLength) {
+                  stableCount++;
+                  if (stableCount >= 6) {
+                    console.log('Response appears stable (no new text for 12s).');
+                    break;
+                  }
+                } else {
+                  stableCount = 0;
+                  lastLength = currentLength;
+                }
 
-                const wc = fullText.split(/\s+/).length;
-                console.log(`After continue: ${wc} words total`);
-                if (wc >= MIN_WORDS) break;
+                await sleep(2000);
               }
 
-              const wordCount = fullText.split(/\s+/).length;
-              if (wordCount < 800) throw new Error(`Response too short even after continue: ${wordCount} words`);
+              let responseText = '';
 
-              return fullText;
+              const candidates = [
+                '[data-message-author-role="model"] .markdown',
+                '.AI-response-container',
+                '.response-container',
+                'div[jsname] p',
+              ];
+
+              for (const sel of candidates) {
+                const els = await page.locator(sel).all();
+                if (els.length > 0) {
+                  const texts = await Promise.all(els.map(e => e.innerText()));
+                  const joined = texts.join('\n\n').trim();
+                  if (joined.length > responseText.length) responseText = joined;
+                }
+              }
+
+              if (!responseText || responseText.split(/\s+/).length < MIN_WORDS) {
+                const bodyText = await page.evaluate(() => document.body.innerText);
+                const promptIndex = bodyText.indexOf(TOPIC.slice(0, 40));
+                if (promptIndex !== -1) {
+                  responseText = bodyText.slice(promptIndex + TOPIC.length).trim();
+                }
+              }
+
+              const wordCount = responseText.trim().split(/\s+/).length;
+              console.log(`Response captured: ${wordCount} words`);
+
+              if (wordCount < MIN_WORDS) {
+                await page.screenshot({ path: 'debug-aimode.png', fullPage: true });
+                throw new Error(`Response too short: ${wordCount} words (minimum ${MIN_WORDS}). Screenshot saved.`);
+              }
+
+              return responseText.trim();
 
             } finally {
               await browser.close();
@@ -220,8 +215,10 @@ jobs:
 
           (async () => {
             console.log('='.repeat(60));
-            console.log(' GENERATE NARRATIVE VIA CHATGPT ');
+            console.log(' GENERATE NARRATIVE VIA GOOGLE AI MODE ');
             console.log('='.repeat(60));
+            console.log(`Topic    : ${TOPIC}`);
+            console.log(`Language : ${LANGUAGE}`);
 
             for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
               try {
@@ -229,7 +226,7 @@ jobs:
                 fs.writeFileSync('tts-script.txt', narrative, 'utf8');
                 const wc = narrative.split(/\s+/).length;
                 console.log('\n' + '='.repeat(60));
-                console.log(`Narrative saved: ${wc} words`);
+                console.log(`✓ Narrative saved to tts-script.txt: ${wc} words`);
                 console.log('='.repeat(60));
                 console.log('\n--- PREVIEW (first 300 chars) ---');
                 console.log(narrative.slice(0, 300) + '...');
@@ -237,14 +234,14 @@ jobs:
               } catch (err) {
                 console.error(`Attempt ${attempt} failed: ${err.message}`);
                 if (attempt < MAX_ATTEMPTS) {
-                  const wait = 25 * attempt;
+                  const wait = 20 * attempt;
                   console.log(`Waiting ${wait}s before retry...`);
                   await sleep(wait * 1000);
                 }
               }
             }
 
-            console.error('::error::Gagal generate narasi setelah semua percobaan.');
+            console.error(`::error::Gagal generate narasi setelah ${MAX_ATTEMPTS} percobaan.`);
             process.exit(1);
           })();
           JSEOF
