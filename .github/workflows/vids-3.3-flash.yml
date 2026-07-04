@@ -1,4 +1,4 @@
-name: Project Video AI
+name: 3.3 Flash
 
 on:
   workflow_dispatch:
@@ -474,6 +474,7 @@ jobs:
           import time
           import math
           import wave
+          import threading
           import textwrap
           from google import genai
           from google.genai import types
@@ -660,7 +661,6 @@ jobs:
                 "camera_movement": "Choose one: zoom_in_slow / zoom_out_slow / pan_left / pan_right / pan_up / pan_down / static",
                 "transition_effect": "Choose one: fade / crossfade / wipe_left / wipe_right / slide_up / zoom_blur / none",
                 "transition_duration": 0.5,
-                "emotion": "Subconscious emotion."
               }}
             ]
           }}
@@ -704,14 +704,21 @@ jobs:
           combined_segments = []
           summary_parts = []
 
-          for idx, chunk_text in enumerate(chunks_text, start=1):
-              label = f"Part {idx}/{len(chunks_text)}"
+          PARALLEL_WORKERS = 3
+          RPM_DELAY = 35
+
+          print(f"\nMemulai analisis audio paralel ({PARALLEL_WORKERS} workers, delay {RPM_DELAY}s antar launch)...")
+
+          results = [None] * len(chunks_text)
+          lock = threading.Lock()
+          rpm_semaphore = threading.Semaphore(PARALLEL_WORKERS)
+
+          def analyze_worker(idx, chunk_text):
+              label = f"Part {idx+1}/{len(chunks_text)}"
               chunk_words = len(chunk_text.split())
               chunk_expected_dur = total_audio_duration * (chunk_words / total_words)
               chunk_target_segments = max(3, round(chunk_expected_dur / TARGET_SEG_SECONDS))
               chunk_min_segments = max(3, math.ceil(chunk_expected_dur / 8))
-
-              print(f"\nAnalyzing Audio {label} (~{chunk_expected_dur:.1f}s, target ~{chunk_target_segments} segmen, min {chunk_min_segments})...")
 
               prompt = base_prompt_template.format(
                   text_chunk=chunk_text,
@@ -719,9 +726,27 @@ jobs:
                   target_segments=chunk_target_segments,
                   min_segments=chunk_min_segments
               )
-              data = analyze_chunk(audio, prompt, system_instruction, label, chunk_expected_dur, chunk_min_segments)
-              combined_segments.extend(data.get("segments", []))
-              summary_parts.append(data.get("summary", ""))
+
+              with rpm_semaphore:
+                  print(f"\n[{label}] Memulai analisis (~{chunk_expected_dur:.1f}s, target ~{chunk_target_segments} segmen, min {chunk_min_segments})...")
+                  data = analyze_chunk(audio, prompt, system_instruction, label, chunk_expected_dur, chunk_min_segments)
+                  results[idx] = data
+
+          threads = []
+          for idx, chunk_text in enumerate(chunks_text):
+              t = threading.Thread(target=analyze_worker, args=(idx, chunk_text))
+              threads.append(t)
+              t.start()
+              if idx < len(chunks_text) - 1:
+                  time.sleep(RPM_DELAY)
+
+          for t in threads:
+              t.join()
+
+          for data in results:
+              if data:
+                  combined_segments.extend(data.get("segments", []))
+                  summary_parts.append(data.get("summary", ""))
 
           combined_summary = " | ".join(summary_parts)
 
@@ -1049,19 +1074,18 @@ jobs:
 
               const queue = Array.from({ length: segments.length }, (_, i) => i);
 
-              await Promise.all([
-                  ...Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
+              await Promise.all(
+                  Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
                       worker(i + 1, browser, queue)
-                  ),
-                  upsamplerWorker(browser),
-              ].map(async (p, idx, arr) => {
-                  await p;
-                  if (idx < arr.length - 1) return;
-              }));
+                  )
+              );
 
               primaryWorkersDone = true;
-              while (failedQueue.length > 0) {
-                  await sleep(500);
+              console.log(`\nPrimary workers selesai. Gambar gagal di failedQueue: ${failedQueue.length}`);
+
+              if (failedQueue.length > 0) {
+                  console.log("Menjalankan Worker 6 (upsampler.com) untuk drain failedQueue...");
+                  await upsamplerWorker(browser);
               }
 
               await browser.close();
@@ -1072,7 +1096,7 @@ jobs:
                       : null;
                   if (firstAvailable) {
                       fs.copyFileSync(`release/images/${firstAvailable}`, "release/thumbnail.jpg");
-                      console.log(`\n✓ Thumbnail fallback dipakai dari segmen ${firstAvailable} (thumbnail custom gagal dibuat).`);
+                      console.log(`\n✓ Thumbnail fallback dipakai dari segmen ${firstAvailable}.`);
                   } else {
                       console.log("\n⚠️ Tidak ada gambar sama sekali untuk dipakai sebagai fallback thumbnail.");
                   }
