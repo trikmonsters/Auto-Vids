@@ -273,7 +273,7 @@ jobs:
           LANGUAGE_MAP = {"Indonesian": "id-ID", "English": "en-US"}
           TTS_LANG = LANGUAGE_MAP.get(LANGUAGE_LABEL, "id-ID")
 
-          TTS_MODELS       = ["gemini-3.1-flash-tts-preview", "gemini-2.5-pro-preview-tts", "gemini-2.5-flash-preview-tts"]
+          TTS_MODELS       = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
           TTS_CALL_TIMEOUT = 150
           TARGET_WORDS     = 320
           MAX_REQUESTS     = 8
