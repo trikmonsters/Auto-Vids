@@ -99,7 +99,7 @@ jobs:
 
           const TOPIC = process.env.TOPIC_INPUT || '';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 1400;
+          const MIN_WORDS = 1500;
           const MAX_ATTEMPTS = 3;
 
           const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away.
@@ -273,7 +273,7 @@ jobs:
           LANGUAGE_MAP = {"Indonesian": "id-ID", "English": "en-US"}
           TTS_LANG = LANGUAGE_MAP.get(LANGUAGE_LABEL, "id-ID")
 
-          TTS_MODELS       = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
+          TTS_MODELS       = ["gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"]
           TTS_CALL_TIMEOUT = 150
           TARGET_WORDS     = 320
           MAX_REQUESTS     = 8
@@ -322,29 +322,15 @@ jobs:
               n = int(SAMPLE_RATE * sec)
               return struct.pack(f"<{n}h", *([0]*n))
 
+          model_timeout_count = {m: 0 for m in TTS_MODELS}
+
           def build_voice_prompt(text):
               cleaned = clean_text(textwrap.dedent(text))
               if LANGUAGE_LABEL == "English":
-                  style = (
-                      "Read this passage as a composed, authoritative documentary narrator targeting a US audience. "
-                      "Rules you must follow without exception: "
-                      "(1) Volume stays constant and moderate the entire time — no sudden loud spikes, no drops to a near-whisper, no fading at sentence ends. "
-                      "(2) Pitch stays in a neutral mid-range — never dramatically rising or falling. Subtle intonation for clarity only. "
-                      "(3) Pace is steady and measured at roughly 140 words per minute — neither rushed nor drawn out. "
-                      "(4) Every word is fully and clearly articulated — crisp consonants, open vowels — so a native American English listener misses nothing. "
-                      "(5) Tone is calm authority: serious and engaged, but never theatrical, never emotional, never robotic."
-                  )
+                  prefix = "Calm documentary narrator voice, steady moderate volume, clear American English pronunciation:\n\n"
               else:
-                  style = (
-                      "Bacakan bagian ini sebagai narator dokumenter yang tenang dan berwibawa. "
-                      "Aturan yang harus diikuti tanpa pengecualian: "
-                      "(1) Volume tetap konstan dan sedang sepanjang waktu — tidak ada lonjakan keras mendadak, tidak ada penurunan ke bisikan, tidak ada memudar di akhir kalimat. "
-                      "(2) Nada tetap di rentang tengah yang netral — tidak naik atau turun secara dramatis. Intonasi halus hanya untuk kejelasan. "
-                      "(3) Tempo stabil dan terukur — tidak terburu-buru, tidak terlalu lambat. "
-                      "(4) Setiap kata diucapkan dengan jelas — konsonan tajam, vokal terbuka. "
-                      "(5) Nada bicara adalah otoritas yang tenang: serius dan terlibat, tetapi tidak teatrikal, tidak emosional, tidak seperti robot."
-                  )
-              return f"Language: {TTS_LANG}\n\n{style}\n\n{cleaned}"
+                  prefix = "Suara narator dokumenter yang tenang, volume sedang stabil, pengucapan Bahasa Indonesia yang jelas:\n\n"
+              return prefix + cleaned
 
           def _tts_worker(api_key, voice, model_name, prompt_text, result_queue):
               try:
@@ -408,15 +394,20 @@ jobs:
 
               for retry in range(5):
                   model_name = TTS_MODELS[retry % len(TTS_MODELS)]
+                  if model_timeout_count.get(model_name, 0) >= 2:
+                      other = [m for m in TTS_MODELS if model_timeout_count.get(m, 0) < 2]
+                      model_name = other[0] if other else TTS_MODELS[retry % len(TTS_MODELS)]
                   try:
                       print(f"  [{retry+1}/5] {model_name} (max {TTS_CALL_TIMEOUT}s)")
                       audio_data = call_tts_killable(prompt_text, model_name)
                       pcm.append(audio_data)
+                      model_timeout_count[model_name] = 0
                       print(f"  ✓ {len(audio_data)} bytes")
                       success = True
                       break
                   except TimeoutError as e:
-                      print(f"  [KILLED] {e}")
+                      model_timeout_count[model_name] = model_timeout_count.get(model_name, 0) + 1
+                      print(f"  [KILLED] {e} (timeout #{model_timeout_count[model_name]} for {model_name})")
                   except Exception as e:
                       msg = str(e)
                       if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
@@ -667,7 +658,6 @@ jobs:
                 "camera_movement": "Choose one: zoom_in_slow / zoom_out_slow / pan_left / pan_right / pan_up / pan_down / static",
                 "transition_effect": "Choose one: fade / crossfade / wipe_left / wipe_right / slide_up / zoom_blur / none",
                 "transition_duration": 0.5,
-                "emotion": "Subconscious emotion."
               }}
             ]
           }}
