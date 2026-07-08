@@ -275,7 +275,7 @@ jobs:
 
           TTS_MODELS       = ["gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"]
           TTS_CALL_TIMEOUT = 300
-          TARGET_WORDS     = 320
+          TARGET_WORDS     = 400
           MAX_REQUESTS     = 8
 
           print("\n" + "="*70)
@@ -325,7 +325,11 @@ jobs:
           model_timeout_count = {m: 0 for m in TTS_MODELS}
 
           def build_voice_prompt(text):
-              return clean_text(textwrap.dedent(text))
+              cleaned = clean_text(textwrap.dedent(text))
+              if LANGUAGE_LABEL == "English":
+                  return f"Read the following transcript word for word. Narrator profile: calm, composed, steady moderate volume throughout, clear American English:\n\n{cleaned}"
+              else:
+                  return f"Bacakan transkrip berikut kata per kata. Profil narator: tenang, berwibawa, volume sedang stabil sepanjang waktu, Bahasa Indonesia yang jelas:\n\n{cleaned}"
 
           def _tts_worker(api_key, voice, model_name, prompt_text, result_queue):
               try:
@@ -340,42 +344,21 @@ jobs:
                           )
                       )
                   )
-
-                  use_stream = model_name.startswith("gemini-3.")
-
-                  if use_stream:
-                      audio_chunks = []
-                      for chunk in client.models.generate_content_stream(
-                          model=model_name,
-                          contents=prompt_text,
-                          config=speech_cfg
-                      ):
-                          if (chunk.candidates and
-                                  chunk.candidates[0].content and
-                                  chunk.candidates[0].content.parts):
-                              part = chunk.candidates[0].content.parts[0]
-                              if hasattr(part, 'inline_data') and part.inline_data and part.inline_data.data:
-                                  audio_chunks.append(part.inline_data.data)
-                      if not audio_chunks:
-                          result_queue.put(('error', 'no audio chunks received')); return
-                      combined = b''.join(audio_chunks)
-                  else:
-                      response = client.models.generate_content(
-                          model=model_name,
-                          contents=prompt_text,
-                          config=speech_cfg
-                      )
-                      if not response.candidates:
-                          result_queue.put(('error', 'no candidates')); return
-                      candidate = response.candidates[0]
-                      finish = getattr(candidate, 'finish_reason', 'unknown')
-                      if not candidate.content or not candidate.content.parts:
-                          result_queue.put(('error', f'no parts (finish={finish})')); return
-                      part = candidate.content.parts[0]
-                      if not hasattr(part, 'inline_data') or part.inline_data is None:
-                          result_queue.put(('error', f'inline_data None (finish={finish})')); return
-                      combined = part.inline_data.data
-
+                  response = client.models.generate_content(
+                      model=model_name,
+                      contents=prompt_text,
+                      config=speech_cfg
+                  )
+                  if not response.candidates:
+                      result_queue.put(('error', 'no candidates')); return
+                  candidate = response.candidates[0]
+                  finish = getattr(candidate, 'finish_reason', 'unknown')
+                  if not candidate.content or not candidate.content.parts:
+                      result_queue.put(('error', f'no parts (finish={finish})')); return
+                  part = candidate.content.parts[0]
+                  if not hasattr(part, 'inline_data') or part.inline_data is None:
+                      result_queue.put(('error', f'inline_data None (finish={finish})')); return
+                  combined = part.inline_data.data
                   if not combined or len(combined) < 100:
                       result_queue.put(('error', f'audio too short: {len(combined) if combined else 0} bytes')); return
                   result_queue.put(('ok', combined))
