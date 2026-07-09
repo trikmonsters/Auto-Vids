@@ -1,4 +1,4 @@
-name: Vids 3.4 Flash
+name: Vids 3.4 Flash (Optimized Audio & RPM Limit)
 
 on:
   workflow_dispatch:
@@ -99,26 +99,31 @@ jobs:
 
           const TOPIC = process.env.TOPIC_INPUT || '';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 1400;
+          const MIN_WORDS = 1800; // Disesuaikan dengan ekspektasi 2300+ target
           const MAX_ATTEMPTS = 3;
 
-          const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away.
+          const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} on this topic: "${TOPIC}"
 
-          STRICT RULES:
-          1. Every paragraph begins with a cold, piercing psychological insight — NOT a generic question.
-          2. Every paragraph is 4-6 long, fully developed sentences minimum. Dense blocks of text. No bullet points. No short lines.
-          3. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors.
-          4. PROHIBITED: "In summary", "In conclusion", "It is important to remember", "Human behavior is complex". No named characters. No generic advice.
-          5. The narrative must escalate from a relatable psychological premise into a surreal, existential realization.
-          6. Write the ENTIRE narrative in fluent, native-level ${LANGUAGE}. Every word must read as if written by a literary native speaker.
+          STRICT NARRATIVE RULES:
+          1. Every paragraph must begin with a cold, piercing psychological insight — NOT a generic question.
+          2. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors.
+          3. PROHIBITED words/phrases: "In summary", "In conclusion", "It is important to remember", "Human behavior is complex". No named characters. No generic advice.
+          4. The narrative must escalate from a relatable psychological premise into a surreal, existential realization.
+          5. Use dense academic-poetic and cold cinematic language throughout.
 
-          Now write a 1700+ word, highly immersive psychological narrative on this topic: "${TOPIC}"
-
-          - Every paragraph MUST begin with an aggressive, hook-driven insight.
-          - Cold, cinematic, sophisticated tone throughout.
-          - Narrative deepens into existential dread or profound discovery.
-          - Dense academic-poetic language.
-          - Output ONLY the narrative text. No title, no preamble — start directly with the first word of the story.`;
+          STRICT TTS-PIPELINE FORMAT RULES (CRITICAL TO PREVENT AI SPEEDED-UP BUG):
+          1. Every single paragraph MUST begin with an aggressive, hook-driven insight AND be preceded by a specific TTS audio directive bracket. 
+          2. CRITICAL ANTI-SPEED BUG: Because the script is long, you MUST forcefully remind the AI of the speed limit inside EVERY SINGLE TAG by repeating "STRICTLY SLOW". Do not omit this.
+          3. Keep sentences very short and punchy. Avoid long-winded sentences. Every sentence must end sharply with a period (.). More periods mean more micro-pauses to slow the AI down permanently.
+          4. Cycle through these specific tags based on the narrative's escalation:
+             - Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, slow cinematic delivery]
+             - Next body paragraphs (alternate dynamically between these): 
+               * [cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]
+               * [assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]
+               * [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]
+               * [rhetorical tone, STRICTLY SLOW pace, long philosophical pause]
+             - Final Paragraph: [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]
+          5. Output ONLY the narrative text. No title, no preamble. Target length: 2300+ words.`;
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -146,7 +151,6 @@ jobs:
               await chatInput.fill(FULL_PROMPT);
               await chatInput.press('Enter');
               console.log('Prompt sent. Waiting for response...');
-
               await sleep(5000);
 
               console.log('Polling for full response (max 5 minutes)...');
@@ -174,7 +178,6 @@ jobs:
               }
 
               let responseText = '';
-
               const candidates = [
                 '[data-message-author-role="model"] .markdown',
                 '.AI-response-container',
@@ -208,7 +211,6 @@ jobs:
               }
 
               return responseText.trim();
-
             } finally {
               await browser.close();
             }
@@ -253,7 +255,7 @@ jobs:
           echo "Generated Words : $(wc -w < tts-script.txt)"
           echo "========================================="
 
-      - name: Generate TTS Audio
+      - name: Generate TTS Audio (Batching 550 Words with 2-Req Limit)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -273,13 +275,13 @@ jobs:
           LANGUAGE_MAP = {"Indonesian": "id-ID", "English": "en-US"}
           TTS_LANG = LANGUAGE_MAP.get(LANGUAGE_LABEL, "id-ID")
 
-          TTS_MODELS       = ["gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"]
+          TTS_MODELS       = ["gemini-2.5-flash-preview-tts"] # Fokus di model preview sesuai request
           TTS_CALL_TIMEOUT = 300
-          TARGET_WORDS     = 400
-          MAX_REQUESTS     = 8
+          TARGET_WORDS     = 550 # Custom chunking limit sesuai request
+          MAX_REQUESTS     = 10 # Menyesuaikan limit RPD 10
 
           print("\n" + "="*70)
-          print(" GEMINI TTS - OPTIMIZED VOICE GENERATION ")
+          print(" GEMINI TTS - OPTIMIZED PSYCHOLOGY AUDIO BATCHING ")
           print("="*70)
 
           with open("tts-script.txt", "r", encoding="utf8") as f:
@@ -296,27 +298,21 @@ jobs:
           if not single_paragraphs:
               print("Error: No paragraphs found!"); exit(1)
 
+          # --- Chunking Logic to fit 550 Words ---
           paragraphs = []
           cur, cur_w = [], 0
           for p in single_paragraphs:
               wc = len(p.split())
               if cur_w + wc > TARGET_WORDS and cur:
-                  paragraphs.append("\n\n".join(cur)); cur, cur_w = [], 0
-              cur.append(p); cur_w += wc
+                  paragraphs.append("\n\n".join(cur))
+                  cur, cur_w = [], 0
+              cur.append(p)
+              cur_w += wc
           if cur: paragraphs.append("\n\n".join(cur))
-
-          while len(paragraphs) > MAX_REQUESTS:
-              merged, i = [], 0
-              while i < len(paragraphs):
-                  if i + 1 < len(paragraphs):
-                      merged.append(paragraphs[i] + "\n\n" + paragraphs[i+1]); i += 2
-                  else:
-                      merged.append(paragraphs[i]); i += 1
-              paragraphs = merged
 
           print(f"Voice    : {VOICE}")
           print(f"Language : {LANGUAGE_LABEL} ({TTS_LANG})")
-          print(f"Batches  : {len(paragraphs)}\n")
+          print(f"Batches  : {len(paragraphs)} (Max 550 words/batch)\n")
 
           def silence(sec):
               n = int(SAMPLE_RATE * sec)
@@ -324,18 +320,29 @@ jobs:
 
           model_timeout_count = {m: 0 for m in TTS_MODELS}
 
+          # --- Injeksi Director's Note di setiap Payload ---
           def build_voice_prompt(text):
               cleaned = clean_text(textwrap.dedent(text))
-              if LANGUAGE_LABEL == "English":
-                  return f"Read the following transcript word for word. Narrator profile: calm, composed, steady moderate volume throughout, clear American English:\n\n{cleaned}"
-              else:
-                  return f"Bacakan transkrip berikut kata per kata. Profil narator: tenang, berwibawa, volume sedang stabil sepanjang waktu, Bahasa Indonesia yang jelas:\n\n{cleaned}"
+              return f"""Read the following transcript based on the audio profile and director's note. Maintain a 100% stable, robust, and well-mastered output volume from the very first word to the absolute last word. Prevent any automatic volume fade-outs at the end of sentences by sustaining vocal presence during pauses.
+
+          # Audio Profile
+          An elite, cold, and deeply analytical narrator for a premium YouTube Dark Psychology channel. The voice is deep, commanding, highly intellectual, and speaks directly into the listener's mind with absolute authority.
+          
+          # Director's note
+          - Style: Academic yet chilling, authoritative, crystal-clear articulation with a professional broadcast cadence.
+          - Pace: Calculated and deliberate. Uses strategic, brief pauses after punctuation to let the weight of the words sink in.
+          - Accent: Neutral, flawless English.
+          - Volume: Fixed, full-bodied amplitude. No whispering that drops below baseline decibels, no robotic flatness.
+          
+          ## Transcript:
+          {cleaned}"""
 
           def _tts_worker(api_key, voice, model_name, prompt_text, result_queue):
               try:
                   client = genai.Client(api_key=api_key)
                   speech_cfg = types.GenerateContentConfig(
                       response_modalities=["AUDIO"],
+                      temperature=0.7,
                       speech_config=types.SpeechConfig(
                           voice_config=types.VoiceConfig(
                               prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -358,6 +365,8 @@ jobs:
                   part = candidate.content.parts[0]
                   if not hasattr(part, 'inline_data') or part.inline_data is None:
                       result_queue.put(('error', f'inline_data None (finish={finish})')); return
+                  
+                  # This directly captures the PCM data similar to curl's output
                   combined = part.inline_data.data
                   if not combined or len(combined) < 100:
                       result_queue.put(('error', f'audio too short: {len(combined) if combined else 0} bytes')); return
@@ -379,8 +388,7 @@ jobs:
                   raise TimeoutError(f"TTS process killed after {TTS_CALL_TIMEOUT}s (API hung)")
               if not q.empty():
                   status, data = q.get()
-                  if status == 'ok':
-                      return data
+                  if status == 'ok': return data
                   raise Exception(data)
               raise Exception("TTS worker exited with no result")
 
@@ -393,30 +401,25 @@ jobs:
               success = False
 
               for retry in range(5):
-                  model_name = TTS_MODELS[retry % len(TTS_MODELS)]
-                  if model_timeout_count.get(model_name, 0) >= 2:
-                      other = [m for m in TTS_MODELS if model_timeout_count.get(m, 0) < 2]
-                      model_name = other[0] if other else TTS_MODELS[retry % len(TTS_MODELS)]
+                  model_name = TTS_MODELS[0]
                   try:
                       print(f"  [{retry+1}/5] {model_name} (max {TTS_CALL_TIMEOUT}s)")
                       audio_data = call_tts_killable(prompt_text, model_name)
                       pcm.append(audio_data)
-                      model_timeout_count[model_name] = 0
                       print(f"  ✓ {len(audio_data)} bytes")
                       success = True
                       break
                   except TimeoutError as e:
-                      model_timeout_count[model_name] = model_timeout_count.get(model_name, 0) + 1
-                      print(f"  [KILLED] {e} (timeout #{model_timeout_count[model_name]} for {model_name})")
+                      print(f"  [KILLED] {e}")
                   except Exception as e:
                       msg = str(e)
                       if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
                           wait = 90 * (retry + 1)
-                          print(f"  [429] {e} — wait {wait}s")
+                          print(f"  [429] Limit Kuota — wait {wait}s")
                           time.sleep(wait)
                       elif "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
                           wait = 20 * (retry + 1)
-                          print(f"  [503/500] {e} — wait {wait}s")
+                          print(f"  [503/500] Overload — wait {wait}s")
                           time.sleep(wait)
                       else:
                           print(f"  [ERROR] {e} — wait 20s")
@@ -426,10 +429,17 @@ jobs:
                   print(f"Batch {i+1} gagal setelah 5 retry. Pipeline berhenti.")
                   exit(1)
 
+              # --- STRICT RATE LIMITING: 2 Request per Menit ---
               if i != len(paragraphs) - 1:
                   pcm.append(silence(GAP))
-                  print(f"  ⏳ Cooldown 21s...")
-                  time.sleep(21)
+                  
+                  # Cek apakah batch saat ini adalah batch ke-2, ke-4, dst.
+                  if (i + 1) % 2 == 0:
+                      print(f"  ⏳ Tembus batas 2 request (menghindari RPM 3). Jeda 40 detik...")
+                      time.sleep(40)
+                  else:
+                      print(f"  ⏳ Cooldown 5s antar batch...")
+                      time.sleep(5)
 
           out = "output/audio.wav"
           with wave.open(out, "wb") as wf:
@@ -447,6 +457,7 @@ jobs:
               "-af", "acompressor=threshold=0.089:ratio=4:attack=5:release=50:makeup=1,loudnorm=I=-18:TP=-2:LRA=7",
               "-ar", str(SAMPLE_RATE), "-ac", str(CHANNELS), norm_out
           ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+          
           if result.returncode == 0 and os.path.exists(norm_out):
               os.replace(norm_out, out)
               print("✓ Loudness dinormalkan (-18 LUFS).")
@@ -603,26 +614,37 @@ jobs:
 
           system_instruction = f"""
           You are an Elite Avant-Garde Creative Director and Master Cyber-Surrealist Artist specializing in world-class 2D modern flat vector illustration for deep psychological, philosophical, and high-intellect cinematic narratives.
-
           Your job is to translate complex emotional audio into a richly detailed, FINELY-GRAINED visual timeline (many short segments, never a few long ones) plus precise FFmpeg camera/transition directives.
-
           SEGMENTATION PRIORITY (READ THIS FIRST, IT IS NON-NEGOTIABLE):
-          - Granularity is the top priority. Many short segments (3-8 seconds each) are strongly preferred over a few long ones. Hundreds of segments across the full narration is perfectly normal and encouraged — never compress multiple distinct sentences, images, or emotional beats into one oversized segment just to produce a shorter response.
+          - Granularity is the top priority.
+          Many short segments (3-8 seconds each) are strongly preferred over a few long ones.
+          Hundreds of segments across the full narration is perfectly normal and encouraged — never compress multiple distinct sentences, images, or emotional beats into one oversized segment just to produce a shorter response.
           - Every meaningful shift in tone, imagery, sentence, or emotional beat in the narration deserves its own dedicated segment.
-          - The sum of every segment's "duration" must add up to the EXACT total duration of the audio section given to you below. Never leave gaps, never exceed 8 seconds per segment.
+          - The sum of every segment's "duration" must add up to the EXACT total duration of the audio section given to you below.
+          Never leave gaps, never exceed 8 seconds per segment.
 
           CRITICAL QUALITY MANDATE FOR IMAGE_PROMPT:
-          - Every single 'image_prompt' MUST be an incredibly dense, ultra-detailed masterpiece, strictly between 1,800 and 2,500 characters long. Avoid generic, filler, or repeated phrasing — each one must vividly describe a genuinely distinct moment tied directly to that segment's spoken text.
-          - DO NOT mention resolution, quality, or aspect-ratio buzzwords such as '8K', '4K', 'UHD', 'ultra high resolution', '16:9', or 'widescreen'. Aspect ratio and resolution are already configured separately in the rendering pipeline — wasting characters on this adds zero value. Spend every available character on substantive visual description instead.
-          - RELEVANCE: The image_prompt must directly visualize what is being said in THAT exact segment's "text" field, not something generic or only loosely related. Re-read the segment's spoken text before writing its image_prompt.
+          - Every single 'image_prompt' MUST be an incredibly dense, ultra-detailed masterpiece, strictly between 1,800 and 2,500 characters long.
+          Avoid generic, filler, or repeated phrasing — each one must vividly describe a genuinely distinct moment tied directly to that segment's spoken text.
+          - DO NOT mention resolution, quality, or aspect-ratio buzzwords such as '8K', '4K', 'UHD', 'ultra high resolution', '16:9', or 'widescreen'.
+          Aspect ratio and resolution are already configured separately in the rendering pipeline — wasting characters on this adds zero value.
+          Spend every available character on substantive visual description instead.
+          - RELEVANCE: The image_prompt must directly visualize what is being said in THAT exact segment's "text" field, not something generic or only loosely related.
+          Re-read the segment's spoken text before writing its image_prompt.
           - ON-IMAGE TEXT: If you include any on-image text (such as the dynamic header), it must be written in {LANGUAGE}, matching the narration's language — never default to English unless {LANGUAGE} is English.
-          - STYLE: Masterpiece 2D Modern Flat Vector Illustration, highly sophisticated editorial design style, clean geometric shapes, complex vector layering. NEVER use 'photorealistic', '3D render', 'hyperrealistic', 'skeuomorphic', or 'octane render'.
-          - VISUAL DEPTH: The flat vector style must look premium, complex, and cinematic. Achieve this through multi-layered backgrounds, isometric perspectives, intricate geometric patterns, and rich textures created purely from flat vector shading.
-          - CHARACTER DESIGN: The subject must be an expressive character with elegant, avant-garde cartoonish proportions (slightly enlarged head to amplify deep internal emotion, expressive eyes, stylized anatomy). Clothing must feature solid, rich, deeply saturated colors with crisp minimalist creases.
-          - BACKGROUND & ENVIRONMENT: A striking, minimalist but highly detailed environment drawn with ultra-thin, precise light-gray and muted-ink lines. The setting must feel vast, atmospheric, and architectural, incorporating clean lines, perfect symmetry, or unsettling distorted perspectives on a pure clinical white canvas.
-          - LIGHTING & COLOR PALETTE: Establish high-contrast, moody, and dramatic atmospheric lighting using flat color gradients and sharp vector shadows (chiaroscuro vector technique). Use an elite, highly curated color palette: deep midnight blues, rich terracottas, muted sages, or royal gold accents clashing against the clean white environment.
-          - SURREAL PSYCHOLOGICAL METAPHOR: This is the core focus. You must avoid literal interpretations. Incorporate profound, mind-bending, and highly unexpected surreal psychological metaphors to depict the subconscious mind, and make sure the metaphor is SPECIFIC to what is being said in this exact segment (not a generic, reused metaphor). (Examples: a character's head shattering into a perfectly organized constellation of geometric glass shards, shadows stretching into infinite labyrinthine corridors, or thoughts manifesting as neon threads weaving through an architectural void).
-
+          - STYLE: Masterpiece 2D Modern Flat Vector Illustration, highly sophisticated editorial design style, clean geometric shapes, complex vector layering.
+          NEVER use 'photorealistic', '3D render', 'hyperrealistic', 'skeuomorphic', or 'octane render'.
+          - VISUAL DEPTH: The flat vector style must look premium, complex, and cinematic.
+          Achieve this through multi-layered backgrounds, isometric perspectives, intricate geometric patterns, and rich textures created purely from flat vector shading.
+          - CHARACTER DESIGN: The subject must be an expressive character with elegant, avant-garde cartoonish proportions (slightly enlarged head to amplify deep internal emotion, expressive eyes, stylized anatomy).
+          Clothing must feature solid, rich, deeply saturated colors with crisp minimalist creases.
+          - BACKGROUND & ENVIRONMENT: A striking, minimalist but highly detailed environment drawn with ultra-thin, precise light-gray and muted-ink lines.
+          The setting must feel vast, atmospheric, and architectural, incorporating clean lines, perfect symmetry, or unsettling distorted perspectives on a pure clinical white canvas.
+          - LIGHTING & COLOR PALETTE: Establish high-contrast, moody, and dramatic atmospheric lighting using flat color gradients and sharp vector shadows (chiaroscuro vector technique).
+          Use an elite, highly curated color palette: deep midnight blues, rich terracottas, muted sages, or royal gold accents clashing against the clean white environment.
+          - SURREAL PSYCHOLOGICAL METAPHOR: This is the core focus. You must avoid literal interpretations.
+          Incorporate profound, mind-bending, and highly unexpected surreal psychological metaphors to depict the subconscious mind, and make sure the metaphor is SPECIFIC to what is being said in this exact segment (not a generic, reused metaphor).
+          (Examples: a character's head shattering into a perfectly organized constellation of geometric glass shards, shadows stretching into infinite labyrinthine corridors, or thoughts manifesting as neon threads weaving through an architectural void).
           FFmpeg VIDEO EDITING MANDATE:
           Determine the best movement and transition for each segment based on emotional intensity:
           - camera_movement options: 'zoom_in_slow', 'zoom_out_slow', 'pan_left', 'pan_right', 'pan_up', 'pan_down', 'static'.
@@ -632,18 +654,19 @@ jobs:
           """
 
           base_prompt_template = """
-          Analyze the specified part of this narration audio. Break the timeline into MANY short, sequential segments with precise timestamps.
-
+          Analyze the specified part of this narration audio.
+          Break the timeline into MANY short, sequential segments with precise timestamps.
           CRITICAL FOCUS: You must ONLY analyze the part of the audio that matches this text section:
           \"\"\"{text_chunk}\"\"\"
 
           CRITICAL SEGMENT REQUIREMENT (DO NOT IGNORE):
           - This audio section spans approximately {expected_duration:.0f} seconds.
-          - Aim for around {target_segments} segments (roughly 3-8 seconds each). Producing MORE than this target is GOOD and welcomed — never fewer.
-          - The absolute minimum allowed is {min_segments} segments. Fewer than this will cause your entire response to be rejected and retried with a different model.
+          - Aim for around {target_segments} segments (roughly 3-8 seconds each).
+          Producing MORE than this target is GOOD and welcomed — never fewer.
+          - The absolute minimum allowed is {min_segments} segments.
+          Fewer than this will cause your entire response to be rejected and retried with a different model.
           - Every segment's "duration" must be between 3 and 8 seconds, no exceptions.
           - The sum of all "duration" values must add up to approximately {expected_duration:.0f} seconds, covering the section from start to end with NO gaps and NO overlap.
-
           Your output must strictly follow this JSON structure:
           {{
             "summary": "Deep overarching theme analysis for this section.",
@@ -750,63 +773,84 @@ jobs:
 
           metadata_system_instruction = f"""
           You are an elite YouTube growth strategist, SEO copywriter, and master thumbnail Art Director for premium psychology/documentary-style channels (the kind of visual language used by top-tier Netflix psychological documentaries and high-end editorial magazine covers).
+          Your job: given the full narration script and its psychological summary, produce YouTube upload metadata that maximizes click-through-rate AND audience satisfaction -- the video must genuinely deliver on whatever curiosity or promise the title/thumbnail creates.
+          The goal is "irresistible but honest": the kind of hook that is actually the real answer to the exact question a curious viewer already has in their head.
+          Never promise something the narrative does not actually deliver.
 
-          Your job: given the full narration script and its psychological summary, produce YouTube upload metadata that maximizes click-through-rate AND audience satisfaction -- the video must genuinely deliver on whatever curiosity or promise the title/thumbnail creates. The goal is "irresistible but honest": the kind of hook that is actually the real answer to the exact question a curious viewer already has in their head. Never promise something the narrative does not actually deliver.
-
-          OUTPUT LANGUAGE: youtube_title, youtube_description, youtube_tags, and any on-image typography inside thumbnail_prompt must all be written in fluent, native-level {LANGUAGE}. Write as a native speaker, never a stiff translation.
+          OUTPUT LANGUAGE: youtube_title, youtube_description, youtube_tags, and any on-image typography inside thumbnail_prompt must all be written in fluent, native-level {LANGUAGE}.
+          Write as a native speaker, never a stiff translation.
 
           TITLE REQUIREMENTS:
-          - 50-70 characters. Front-load the most curiosity-inducing or emotionally charged phrase.
-          - Use a provocative psychological claim or question when it genuinely matches the content. Numbers/power-words are welcome if relevant.
+          - 50-70 characters.
+          Front-load the most curiosity-inducing or emotionally charged phrase.
+          - Use a provocative psychological claim or question when it genuinely matches the content.
+          Numbers/power-words are welcome if relevant.
           - Strong SEO: naturally weave in the real search terms a curious viewer would type, in {LANGUAGE}.
-
           DESCRIPTION REQUIREMENTS:
           - 150-300 words.
           - The first 2 sentences must work as a strong SEO + curiosity hook (this is the part shown before "show more").
           - Naturally include 3-5 relevant keyword phrases (not stuffed/repeated unnaturally).
           - Briefly state what the viewer will learn, feel, or realize by watching. End with a soft call-to-action.
-
           TAGS REQUIREMENTS:
-          - 12-20 tags, ordered most-relevant-first, mixing broad terms with specific phrases tied to this exact topic. Tags may stay in their most search-natural language (mix {LANGUAGE} and English search terms is fine here, since tags are not user-facing prose).
-
-          THUMBNAIL_PROMPT REQUIREMENTS -- treat this as a precise Art Director brief for a premium YouTube thumbnail. The output must be a complete, implementation-ready image description that a generative AI can execute exactly.
-
+          - 12-20 tags, ordered most-relevant-first, mixing broad terms with specific phrases tied to this exact topic.
+          Tags may stay in their most search-natural language (mix {LANGUAGE} and English search terms is fine here, since tags are not user-facing prose).
+          THUMBNAIL_PROMPT REQUIREMENTS -- treat this as a precise Art Director brief for a premium YouTube thumbnail.
+          The output must be a complete, implementation-ready image description that a generative AI can execute exactly.
           MANDATORY LAYOUT BLUEPRINT (non-negotiable, the composition is always split into two zones):
 
-          LEFT ZONE (35-42% of total width): Contains ONLY the typography stack. Clean white background. No character, no metaphor element enters this zone. Typography must be large enough to dominate at thumbnail size.
-
-          RIGHT ZONE (58-65% of total width): Contains the primary character plus all visual elements (metaphors, antagonist, symbolic details, background). The character's face must remain clearly visible and never covered.
-
+          LEFT ZONE (35-42% of total width): Contains ONLY the typography stack.
+          Clean white background. No character, no metaphor element enters this zone.
+          Typography must be large enough to dominate at thumbnail size.
+          RIGHT ZONE (58-65% of total width): Contains the primary character plus all visual elements (metaphors, antagonist, symbolic details, background).
+          The character's face must remain clearly visible and never covered.
           STEP 1 — TYPOGRAPHY (design this first, then build the image around it):
-          - Main headline: 2-3 short lines of stacked ALL-CAPS bold condensed sans-serif text in {LANGUAGE}. Each line on its own row, progressively building the hook. Line 1: matte black (#111111). Line 2: the most emotionally charged phrase — deep crimson red (#C62828 or #D32F2F). Line 3: largest text in the stack, completing the hook — same crimson or even bolder. Distressed ink texture, rough letterpress grain, strong drop shadow slightly below-right. All lines left-aligned, tight letter-spacing.
-          - Subtitle block: placed below the main headline with a gap of roughly one line-height. A rough horizontal black paintbrush stroke rectangle (hand-painted texture) sits behind white ALL-CAPS subtitle text in a slightly smaller bold font (e.g. "TAPI KAMU TIDAK PERNAH" for Indonesian or "BUT YOU NEVER" for English). Immediately below this brushstroke block, one line of bold crimson uppercase text slightly larger than the subtitle (e.g. "MENYADARINYA" or "REALIZED IT") — no background behind this line, just text against the white zone.
-          - Typography must be 100% legible at 320px wide (mobile thumbnail). Never overlap the character's face. Generous safe margin (at least 8% of total width) on all sides of the text.
-
+          - Main headline: 2-3 short lines of stacked ALL-CAPS bold condensed sans-serif text in {LANGUAGE}.
+          Each line on its own row, progressively building the hook. Line 1: matte black (#111111).
+          Line 2: the most emotionally charged phrase — deep crimson red (#C62828 or #D32F2F).
+          Line 3: largest text in the stack, completing the hook — same crimson or even bolder.
+          Distressed ink texture, rough letterpress grain, strong drop shadow slightly below-right. All lines left-aligned, tight letter-spacing.
+          - Subtitle block: placed below the main headline with a gap of roughly one line-height.
+          A rough horizontal black paintbrush stroke rectangle (hand-painted texture) sits behind white ALL-CAPS subtitle text in a slightly smaller bold font (e.g. "TAPI KAMU TIDAK PERNAH" for Indonesian or "BUT YOU NEVER" for English).
+          Immediately below this brushstroke block, one line of bold crimson uppercase text slightly larger than the subtitle (e.g. "MENYADARINYA" or "REALIZED IT") — no background behind this line, just text against the white zone.
+          - Typography must be 100% legible at 320px wide (mobile thumbnail). Never overlap the character's face.
+          Generous safe margin (at least 8% of total width) on all sides of the text.
           STEP 2 — PRIMARY CHARACTER (right zone, slightly left-of-center in right zone):
-          - A highly expressive young adult (gender and specific look tailored to the narrative's emotional core — do not default to the same archetype every video). Anime-influenced illustration style: slightly oversized emotive eyes that convey the core emotion of the video's psychological twist in a single glance, stylized anatomy, cinematic editorial polish.
-          - One unmistakable strong physical gesture that literalizes the narrative's core tension (e.g. both hands gripping the sides of the skull as internal pressure builds, one hand reaching toward a vanishing reflection, fingers pressed against a cracking surface). This gesture is the emotional anchor of the entire image.
-          - Dark richly saturated clothing (navy, charcoal, or deep teal) to contrast against the white background. Face well-lit with dramatic directional lighting.
+          - A highly expressive young adult (gender and specific look tailored to the narrative's emotional core — do not default to the same archetype every video).
+          Anime-influenced illustration style: slightly oversized emotive eyes that convey the core emotion of the video's psychological twist in a single glance, stylized anatomy, cinematic editorial polish.
+          - One unmistakable strong physical gesture that literalizes the narrative's core tension (e.g. both hands gripping the sides of the skull as internal pressure builds, one hand reaching toward a vanishing reflection, fingers pressed against a cracking surface).
+          This gesture is the emotional anchor of the entire image.
+          - Dark richly saturated clothing (navy, charcoal, or deep teal) to contrast against the white background.
+          Face well-lit with dramatic directional lighting.
 
           STEP 3 — CORE SURREAL METAPHOR (the single most powerful visual invention, unique to THIS topic):
-          - Invent one specific surreal literalization of the psychological core of this exact narrative. Never reuse generic metaphors across different topics. The metaphor must emerge directly from the spoken content. Examples of originality (do not copy, only use as inspiration of specificity level): skull opened to reveal a glowing gold labyrinthine maze-brain with puppet strings descending from a faceless figure above; fractured mirrors behind the character each showing a different divergent self with kintsugi gold cracks running between the shards; clock hands made of the character's own fingerprints dissolving into smoke; neural-circuit roots growing down from the brain into an underground cage of equations.
+          - Invent one specific surreal literalization of the psychological core of this exact narrative.
+          Never reuse generic metaphors across different topics. The metaphor must emerge directly from the spoken content.
+          Examples of originality (do not copy, only use as inspiration of specificity level): skull opened to reveal a glowing gold labyrinthine maze-brain with puppet strings descending from a faceless figure above;
+          fractured mirrors behind the character each showing a different divergent self with kintsugi gold cracks running between the shards;
+          clock hands made of the character's own fingerprints dissolving into smoke;
+          neural-circuit roots growing down from the brain into an underground cage of equations.
           - The metaphor must be visually complex but instantly readable at thumbnail scale — no fine detail that disappears when shrunk.
-
           STEP 4 — SECONDARY ANTAGONIST or PRESSURE ELEMENT (when the narrative involves external manipulation or social pressure):
-          - A partially visible, deliberately ambiguous second figure (only torso and hands visible, face cropped out of frame or turned away): faceless authority, looming silhouette, puppet master. Positioned above or behind the character. Hands extended with some form of control mechanism (strings, geometric constraints, radiating pressure lines). Rendered in darker navy/charcoal to visually recede behind the primary character.
-
+          - A partially visible, deliberately ambiguous second figure (only torso and hands visible, face cropped out of frame or turned away): faceless authority, looming silhouette, puppet master.
+          Positioned above or behind the character. Hands extended with some form of control mechanism (strings, geometric constraints, radiating pressure lines).
+          Rendered in darker navy/charcoal to visually recede behind the primary character.
           STEP 5 — SUPPORTING SYMBOLIC SCATTER (5-8 small elements, topic-specific):
-          - A constellation of small symbolic objects floating in the right zone's background space, each one directly relevant to this video's specific psychological theme. Examples of the specificity required: a cracked antique brass compass indicating lost direction; Polaroid photographs showing distorted alternative memories; geometric warning triangles with exclamation marks; neural network node-and-line diagrams; fragmented architectural blueprints; broken pocket watches. Never generic decorations — every element must earn its place by referencing something from the narrative.
-
+          - A constellation of small symbolic objects floating in the right zone's background space, each one directly relevant to this video's specific psychological theme.
+          Examples of the specificity required: a cracked antique brass compass indicating lost direction; Polaroid photographs showing distorted alternative memories;
+          geometric warning triangles with exclamation marks; neural network node-and-line diagrams; fragmented architectural blueprints; broken pocket watches.
+          Never generic decorations — every element must earn its place by referencing something from the narrative.
           STEP 6 — ENVIRONMENT & COLOR:
-          - Background: pure clinical white (#FFFFFF) with ultra-thin light-gray geometric grid lines (0.5px weight, barely visible), subtle architectural line art suggesting depth and scale. Consistent with premium editorial documentary aesthetic. No gradients, no noise, no photographic texture.
-          - Strict color palette: pure white, midnight navy (#0D1B2A), charcoal black (#111111), metallic gold (#C9A84C), deep crimson (#C62828), muted sage or slate grey for secondary accents only. Every color must serve a purpose — no decorative color choices.
-          - Lighting: dramatic single-source cinematic lighting from upper-right, creating crisp deep shadows on the left side of the character's face and form. High-contrast, premium, documentary-grade.
+          - Background: pure clinical white (#FFFFFF) with ultra-thin light-gray geometric grid lines (0.5px weight, barely visible), subtle architectural line art suggesting depth and scale.
+          Consistent with premium editorial documentary aesthetic. No gradients, no noise, no photographic texture.
+          - Strict color palette: pure white, midnight navy (#0D1B2A), charcoal black (#111111), metallic gold (#C9A84C), deep crimson (#C62828), muted sage or slate grey for secondary accents only.
+          Every color must serve a purpose — no decorative color choices.
+          - Lighting: dramatic single-source cinematic lighting from upper-right, creating crisp deep shadows on the left side of the character's face and form.
+          High-contrast, premium, documentary-grade.
 
           STEP 7 — FINAL BRIEF:
           - Write the thumbnail_prompt as one continuous flowing description (no numbered steps in the output) of 1,800-2,500 characters, moving from typography instructions → character → metaphor → antagonist → supporting elements → environment → lighting, in that order.
           - Do NOT mention resolution, quality, or aspect-ratio buzzwords anywhere in the output (e.g. no '8K', '4K', '16:9', 'ultra high resolution', 'masterpiece quality') — those are handled by the rendering pipeline.
           - Every adjective must be visually concrete and implementable, no vague praise words.
-
           Strictly output ONLY valid JSON matching the exact schema provided. No markdown wrappers.
           """
 
@@ -892,7 +936,6 @@ jobs:
           const MAX_WORKERS = 5;
           const COOLDOWN_EVERY = 30;
           const COOLDOWN_MS = 45000;
-
           fs.mkdirSync("release/images", { recursive: true });
 
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -920,7 +963,6 @@ jobs:
           const FREEGEN_DELAY_THRESHOLD = 100;
           const FREEGEN_DELAY_MS = 180000;
           let freegenAPIRequestCount = 0;
-
           async function generateFreegenAPI(prompt, outPath) {
               for (let retry = 1; retry <= 2; retry++) {
                   try {
@@ -936,7 +978,6 @@ jobs:
                       });
                       if (!signerRes.ok) throw new Error(`Signer HTTP ${signerRes.status}`);
                       const {ts, sig} = await signerRes.json();
-
                       const genRes = await fetch('https://image-generator.freegen.app', {
                           method: 'POST',
                           headers: {'Content-Type': 'application/json'},
@@ -946,7 +987,6 @@ jobs:
                       const genData = await genRes.json();
 
                       freegenAPIRequestCount++;
-
                       if (genData.image_data_url) {
                           const imgRes = await fetch(genData.image_data_url);
                           const buffer = Buffer.from(await imgRes.arrayBuffer());
@@ -959,7 +999,6 @@ jobs:
                           const jobId = genData.job_id;
                           const hashHex = crypto.createHash('sha256').update(jobId + ts).digest('hex');
                           const auth = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + ts;
-
                           const ok = await new Promise((resolve) => {
                               const ws = new WebSocket('wss://websocket-bridge.freegen.app/ws');
                               const timer = setTimeout(() => { ws.terminate(); resolve(false); }, 300000);
@@ -988,7 +1027,6 @@ jobs:
                                       resolve(false);
                                   }
                               });
-
                               ws.on('error', (err) => {
                                   clearTimeout(timer);
                                   console.log(`[FreegenAPI WS] ${err.message}`);
@@ -1028,7 +1066,6 @@ jobs:
                   const img = imageContainer.locator("img");
                   const src = await img.getAttribute("src");
                   const base64 = src.replace(/^data:image\/[a-z]+;base64,/, "");
-
                   fs.writeFileSync(outPath, base64, "base64");
 
                   console.log("✓", outPath);
@@ -1118,13 +1155,11 @@ jobs:
               }
 
               const queue = Array.from({ length: segments.length }, (_, i) => i);
-
               await Promise.all(
                   Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
                       worker(i + 1, browser, queue)
                   )
               );
-
               primaryWorkersDone = true;
               console.log(`\nPrimary workers selesai. Gambar gagal: ${failedQueue.length}`);
 
@@ -1134,7 +1169,6 @@ jobs:
               }
 
               await browser.close();
-
               if (!fs.existsSync("release/thumbnail.jpg")) {
                   const firstAvailable = fs.existsSync("release/images")
                       ? fs.readdirSync("release/images").filter(f => f.endsWith(".jpg")).sort()[0]
