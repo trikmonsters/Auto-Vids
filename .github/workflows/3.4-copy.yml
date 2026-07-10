@@ -165,7 +165,7 @@ jobs:
 
                 if (currentLength === lastLength) {
                   stableCount++;
-                  if (stableCount >= 6) {
+                  if (stableCount >= 30) {
                     console.log('Response appears stable (no new text for 12s).');
                     break;
                   }
