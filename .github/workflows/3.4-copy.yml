@@ -99,7 +99,7 @@ jobs:
 
           const TOPIC = process.env.TOPIC_INPUT || '';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 2000;
+          const MIN_WORDS = 1400;
           const MAX_ATTEMPTS = 3;
 
           const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} on this topic: "${TOPIC}"
@@ -123,7 +123,7 @@ jobs:
                * [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]
                * [rhetorical tone, STRICTLY SLOW pace, long philosophical pause]
              - Final Paragraph: [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]
-          5. Output ONLY the narrative text. No title, no preamble. Target length: 2300+ words.`;
+          5. Output ONLY the narrative text. No title, no preamble. Target length: 1900+ words.`;
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
 
