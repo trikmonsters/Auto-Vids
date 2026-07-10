@@ -162,7 +162,7 @@ jobs:
               await chatInput.fill(FULL_PROMPT);
               await chatInput.press('Enter');
               console.log('Prompt sent. Waiting for response...');
-              await sleep(35000);
+              await sleep(95000);
 
               console.log('Polling for full response (max 5 minutes)...');
               const startTime = Date.now();
