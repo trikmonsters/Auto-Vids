@@ -99,7 +99,7 @@ jobs:
 
           const TOPIC = process.env.TOPIC_INPUT || '';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 1800; // Disesuaikan dengan ekspektasi 2300+ target
+          const MIN_WORDS = 2000;
           const MAX_ATTEMPTS = 3;
 
           const FULL_PROMPT = `You are a master of psychological subversion and narrative design. Your work functions like a cognitive trap: once the reader starts, they cannot look away. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} on this topic: "${TOPIC}"
@@ -151,7 +151,7 @@ jobs:
               await chatInput.fill(FULL_PROMPT);
               await chatInput.press('Enter');
               console.log('Prompt sent. Waiting for response...');
-              await sleep(5000);
+              await sleep(15000);
 
               console.log('Polling for full response (max 5 minutes)...');
               const startTime = Date.now();
@@ -1135,7 +1135,7 @@ jobs:
           
           node generate-images.js
 
-      - name: Compile Final Video (FFmpeg 16:9 Widescreen Automation)
+      - name: Compile Final Video
         continue-on-error: true
         run: |
           python3 << 'PYEOF'
