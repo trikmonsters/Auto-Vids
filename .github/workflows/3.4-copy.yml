@@ -162,7 +162,7 @@ jobs:
               await chatInput.fill(FULL_PROMPT);
               await chatInput.press('Enter');
               console.log('Prompt sent. Waiting for response...');
-              await sleep(15000);
+              await sleep(35000);
 
               console.log('Polling for full response (max 5 minutes)...');
               const startTime = Date.now();
@@ -176,7 +176,7 @@ jobs:
 
                 if (currentLength === lastLength) {
                   stableCount++;
-                  if (stableCount >= 30) {
+                  if (stableCount >= 10) {
                     console.log('Response appears stable (no new text for 12s).');
                     break;
                   }
