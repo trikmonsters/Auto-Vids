@@ -99,7 +99,7 @@ jobs:
 
           const TOPIC = process.env.TOPIC_INPUT || '';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 1400;
+          const MIN_WORDS = 1000;
           const MAX_ATTEMPTS = 3;
 
           const FULL_PROMPT = `You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} based on this raw topic data: "${TOPIC}"
@@ -172,12 +172,13 @@ jobs:
 
               while (Date.now() - startTime < TIMEOUT) {
                 const bodyText = await page.evaluate(() => document.body.innerText);
+                console.log(bodyText);
                 const currentLength = bodyText.length;
                 console.log(currentLength);
 
                 if (currentLength === lastLength) {
                   stableCount++;
-                  if (stableCount >= 10) {
+                  if (stableCount >= 25) {
                     console.log('Response appears stable (no new text for 12s).');
                     break;
                   }
