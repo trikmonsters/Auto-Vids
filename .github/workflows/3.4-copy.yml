@@ -173,6 +173,7 @@ jobs:
               while (Date.now() - startTime < TIMEOUT) {
                 const bodyText = await page.evaluate(() => document.body.innerText);
                 const currentLength = bodyText.length;
+                console.log(currentLength);
 
                 if (currentLength === lastLength) {
                   stableCount++;
