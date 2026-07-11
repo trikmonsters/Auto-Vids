@@ -142,7 +142,7 @@ jobs:
             console.log(`\n[Attempt ${attempt}/${MAX_ATTEMPTS}] Launching browser...`);
             const browser = await chromium.launch({
               headless: true,
-              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled', '--incognito']
             });
             const context = await browser.newContext({
               viewport: { width: 1280, height: 1000 },
@@ -162,7 +162,7 @@ jobs:
               await chatInput.fill(FULL_PROMPT);
               await chatInput.press('Enter');
               console.log('Prompt sent. Waiting for response...');
-              await sleep(95000);
+              await sleep(55000);
 
               console.log('Polling for full response (max 5 minutes)...');
               const startTime = Date.now();
@@ -266,6 +266,7 @@ jobs:
 
           echo "========================================="
           echo "Generated Words : $(wc -w < tts-script.txt)"
+          cat tts-script.txt
           echo "========================================="
 
       - name: Generate TTS Audio (REST API & Sequential Safe Mode)
