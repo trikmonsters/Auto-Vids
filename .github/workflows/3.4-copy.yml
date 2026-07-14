@@ -742,85 +742,75 @@ jobs:
           const { chromium } = require("playwright");
           const fs = require("fs");
           const sharp = require("sharp");
+          const os = require("os");
+          const path = require("path");
 
           const analysis = JSON.parse(
               fs.readFileSync("release/analysis.json", "utf8")
           );
           const segments = analysis.segments;
-          const MAX_WORKERS = 5;
-          const COOLDOWN_EVERY = 30;
-          const COOLDOWN_MS = 45000;
+
+          const BROWSER_LIMIT           = 100;
+          const NUM_BROWSERS            = 3;
+          const MAX_WORKERS_PER_BROWSER = 2;
+
+          const USER_AGENTS = [
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          ];
+          const LOCALES   = ['en-US', 'en-GB', 'id-ID'];
+          const TIMEZONES = ['America/New_York', 'Europe/London', 'Asia/Jakarta'];
+          const VIEWPORTS = [
+              { width: 1280, height: 800 },
+              { width: 1366, height: 768 },
+              { width: 1440, height: 900 },
+          ];
+
           fs.mkdirSync("release/images", { recursive: true });
 
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-          let completedCount = 0;
-          let cooldownPromise = null;
-
-          async function maybeCooldown() {
-              if (cooldownPromise) {
-                  await cooldownPromise;
-                  return;
-              }
-              completedCount++;
-              if (completedCount % COOLDOWN_EVERY === 0) {
-                  console.log(`\n⏳ ${completedCount} gambar selesai. Cooldown ${COOLDOWN_MS / 1000}s untuk menghindari overload freegen.app...\n`);
-                  cooldownPromise = sleep(COOLDOWN_MS).then(() => { cooldownPromise = null; });
-                  await cooldownPromise;
-              }
-          }
-
-          const crypto = require('crypto');
+          const crypto    = require('crypto');
           const WebSocket = require('ws');
-
           const FREEGEN_RATIO = '16:9';
-          const FREEGEN_DELAY_THRESHOLD = 100;
-          const FREEGEN_DELAY_MS = 180000;
-          let freegenAPIRequestCount = 0;
+
           async function generateFreegenAPI(prompt, outPath) {
               for (let retry = 1; retry <= 2; retry++) {
                   try {
-                      if (segments.length > FREEGEN_DELAY_THRESHOLD && freegenAPIRequestCount === FREEGEN_DELAY_THRESHOLD) {
-                          console.log(`\n⏳ Segment count > ${FREEGEN_DELAY_THRESHOLD}. Delay ${FREEGEN_DELAY_MS/60000} menit sebelum request ke-${freegenAPIRequestCount + 1}...`);
-                          await sleep(FREEGEN_DELAY_MS);
-                      }
-
                       const signerRes = await fetch('https://prompt-signer.freegen.app', {
                           method: 'POST',
-                          headers: {'Content-Type': 'application/json'},
-                          body: JSON.stringify({prompt})
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ prompt })
                       });
                       if (!signerRes.ok) throw new Error(`Signer HTTP ${signerRes.status}`);
-                      const {ts, sig} = await signerRes.json();
+                      const { ts, sig } = await signerRes.json();
+
                       const genRes = await fetch('https://image-generator.freegen.app', {
                           method: 'POST',
-                          headers: {'Content-Type': 'application/json'},
-                          body: JSON.stringify({prompt, ts, sig, ratio_id: FREEGEN_RATIO})
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ prompt, ts, sig, ratio_id: FREEGEN_RATIO })
                       });
                       if (!genRes.ok) throw new Error(`Generator HTTP ${genRes.status}`);
                       const genData = await genRes.json();
 
-                      freegenAPIRequestCount++;
                       if (genData.image_data_url) {
                           const imgRes = await fetch(genData.image_data_url);
                           const buffer = Buffer.from(await imgRes.arrayBuffer());
-                          await sharp(buffer).jpeg({quality: 92}).toFile(outPath);
+                          await sharp(buffer).jpeg({ quality: 92 }).toFile(outPath);
                           console.log(`✓ ${outPath} (freegen API direct)`);
                           return true;
                       }
 
                       if (genData.job_id) {
-                          const jobId = genData.job_id;
+                          const jobId   = genData.job_id;
                           const hashHex = crypto.createHash('sha256').update(jobId + ts).digest('hex');
-                          const auth = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + ts;
+                          const auth    = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + ts;
                           const ok = await new Promise((resolve) => {
-                              const ws = new WebSocket('wss://websocket-bridge.freegen.app/ws');
+                              const ws    = new WebSocket('wss://websocket-bridge.freegen.app/ws');
                               const timer = setTimeout(() => { ws.terminate(); resolve(false); }, 300000);
-
                               ws.on('open', () => {
-                                  ws.send(JSON.stringify({type: 'subscribe', job_id: jobId, auth}));
+                                  ws.send(JSON.stringify({ type: 'subscribe', job_id: jobId, auth }));
                               });
-
                               ws.on('message', async (data) => {
                                   const msg = JSON.parse(data.toString());
                                   if (msg.type === 'result') {
@@ -828,7 +818,7 @@ jobs:
                                       let b64 = msg.image_data;
                                       if (b64.includes(',')) b64 = b64.split(',')[1];
                                       try {
-                                          await sharp(Buffer.from(b64, 'base64')).jpeg({quality: 92}).toFile(outPath);
+                                          await sharp(Buffer.from(b64, 'base64')).jpeg({ quality: 92 }).toFile(outPath);
                                           ws.terminate();
                                           resolve(true);
                                       } catch (e) {
@@ -847,14 +837,12 @@ jobs:
                                   resolve(false);
                               });
                           });
-
                           if (ok) {
                               console.log(`✓ ${outPath} (freegen API WebSocket)`);
                               return true;
                           }
                           throw new Error('WebSocket result not received');
                       }
-
                       throw new Error('No job_id or image_data_url in response');
                   } catch (err) {
                       console.log(`[FreegenAPI] Retry ${retry}/2: ${err.message}`);
@@ -865,9 +853,7 @@ jobs:
 
           async function generate(page, prompt, outPath) {
               try {
-                  await page.goto("https://freegen.app/", {
-                      waitUntil: "domcontentloaded"
-                  });
+                  await page.goto("https://freegen.app/", { waitUntil: "domcontentloaded" });
                   await page.waitForLoadState("networkidle").catch(() => {});
 
                   await page.selectOption("#aspectRatioSelect", "16:9");
@@ -877,42 +863,63 @@ jobs:
                   const imageContainer = page.locator("#imageContainer");
                   await imageContainer.waitFor({ timeout: 90000 });
 
-                  const img = imageContainer.locator("img");
-                  const src = await img.getAttribute("src");
+                  const img    = imageContainer.locator("img");
+                  const src    = await img.getAttribute("src");
                   const base64 = src.replace(/^data:image\/[a-z]+;base64,/, "");
                   fs.writeFileSync(outPath, base64, "base64");
 
                   console.log("✓", outPath);
                   return true;
               } catch (err) {
-                  console.log(`[freegen.app Playwright] Gagal: ${err.message} -- langsung ke fallback freegen API`);
+                  console.log(`[Playwright] Gagal: ${err.message} — masuk failedQueue`);
                   try {
                       await page.screenshot({ path: outPath.replace(/\.jpg$/, ".debug.png"), fullPage: true });
-                      const bodyText = await page.locator("body").innerText().catch(() => "(gagal ambil teks halaman)");
+                      const bodyText = await page.locator("body").innerText().catch(() => "(gagal)");
                       fs.writeFileSync(outPath.replace(/\.jpg$/, ".debug.txt"), bodyText.slice(0, 3000));
-                  } catch (debugErr) {
-                      console.log("Gagal ambil screenshot debug:", debugErr.message);
-                  }
+                  } catch (_) {}
                   return false;
               }
           }
 
-          const failedQueue = [];
-          let primaryWorkersDone = false;
+          async function launchIncognitoSession(sessionIdx) {
+              const userDataDir = path.join(os.tmpdir(), `freegen-session-${sessionIdx}-${Date.now()}`);
 
-          async function worker(id, browser, queue) {
-              const page = await browser.newPage();
+              const context = await chromium.launchPersistentContext(userDataDir, {
+                  headless: true,
+                  args: [
+                      '--no-sandbox',
+                      '--disable-setuid-sandbox',
+                      '--incognito',
+                      '--disable-blink-features=AutomationControlled',
+                      '--disable-dev-shm-usage',
+                  ],
+                  userAgent:  USER_AGENTS[sessionIdx % USER_AGENTS.length],
+                  locale:     LOCALES[sessionIdx % LOCALES.length],
+                  timezoneId: TIMEZONES[sessionIdx % TIMEZONES.length],
+                  viewport:   VIEWPORTS[sessionIdx % VIEWPORTS.length],
+                  storageState: undefined,
+              });
+
+              console.log(`  [Sesi ${sessionIdx + 1}] UserAgent : ${USER_AGENTS[sessionIdx % USER_AGENTS.length]}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] Locale    : ${LOCALES[sessionIdx % LOCALES.length]}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] Timezone  : ${TIMEZONES[sessionIdx % TIMEZONES.length]}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] Viewport  : ${JSON.stringify(VIEWPORTS[sessionIdx % VIEWPORTS.length])}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] DataDir   : ${userDataDir}`);
+
+              return context;
+          }
+
+          const failedQueue = [];
+
+          async function worker(id, sessionIdx, context, queue) {
+              const page = await context.newPage();
               while (true) {
                   const index = queue.shift();
                   if (index === undefined) break;
-                  console.log(`\nWorker ${id} -> segmen ${index+1}/${segments.length}`);
-                  console.log(`${segments[index].start} -> ${segments[index].end}`);
-                  const outPath = `release/images/${String(index+1).padStart(3, "0")}.jpg`;
+                  console.log(`\n[Sesi${sessionIdx + 1}|Tab${id}] Segmen ${index + 1}/${segments.length} (${segments[index].start} -> ${segments[index].end})`);
+                  const outPath = `release/images/${String(index + 1).padStart(3, "0")}.jpg`;
                   const ok = await generate(page, segments[index].image_prompt, outPath);
-                  if (!ok) {
-                      failedQueue.push({ index, prompt: segments[index].image_prompt, outPath });
-                  }
-                  await maybeCooldown();
+                  if (!ok) failedQueue.push({ index, prompt: segments[index].image_prompt, outPath });
               }
               await page.close();
           }
@@ -921,85 +928,111 @@ jobs:
               let processed = 0;
               while (failedQueue.length > 0) {
                   const job = failedQueue.shift();
-                  console.log(`\nFallback Worker (freegen API) -> segmen ${job.index+1}/${segments.length}`);
+                  console.log(`\n[FallbackAPI] Retry segmen ${job.index + 1}/${segments.length}`);
                   const ok = await generateFreegenAPI(job.prompt, job.outPath);
                   if (!ok) {
                       fs.writeFileSync(
                           job.outPath.replace(/\.jpg$/, ".error.txt"),
-                          `Gagal di freegen.app Playwright dan freegen API untuk segmen ${job.index+1}.`
+                          `Segmen ${job.index + 1} gagal total di Playwright dan freegen API.`
                       );
-                      console.log(`⚠️ Segmen ${job.index+1} gagal total di kedua provider.`);
+                      console.log(`⚠️ Segmen ${job.index + 1} gagal total.`);
                   }
                   processed++;
               }
-              if (processed > 0) {
-                  console.log(`\nFallback Worker selesai memproses ${processed} gambar.`);
-              }
+              if (processed > 0) console.log(`\n[FallbackAPI] Selesai memproses ${processed} gambar.`);
           }
 
           (async () => {
-              console.log("\n==============================");
-              console.log("IMAGE GENERATOR");
-              console.log("==============================");
-              console.log(`Workers  : ${MAX_WORKERS} (freegen.app Playwright) + API fallback`);
-              console.log(`Segments : ${segments.length}`);
-              console.log(`Cooldown : ${COOLDOWN_MS / 1000}s tiap ${COOLDOWN_EVERY} gambar`);
-              if (segments.length > FREEGEN_DELAY_THRESHOLD) {
-                  console.log(`Rate limit: delay ${FREEGEN_DELAY_MS/60000} menit sebelum request API ke-${FREEGEN_DELAY_THRESHOLD+1}`);
+              console.log("\n" + "=".repeat(60));
+              console.log(" IMAGE GENERATOR — MULTI-SESI INCOGNITO ");
+              console.log("=".repeat(60));
+              console.log(`Total segmen : ${segments.length}`);
+              console.log(`Sesi browser : ${NUM_BROWSERS} (maks ${BROWSER_LIMIT} img/sesi)`);
+              console.log(`Tab/sesi     : ${MAX_WORKERS_PER_BROWSER}`);
+              console.log(`Fingerprint  : user-agent + locale + timezone + viewport berbeda tiap sesi`);
+              console.log(`Storage      : folder temp BARU tiap sesi (cookie & session = nol)\n`);
+
+              const buckets = [];
+              for (let b = 0; b < NUM_BROWSERS; b++) {
+                  const start = b * BROWSER_LIMIT;
+                  const end   = Math.min(start + BROWSER_LIMIT, segments.length);
+                  if (start >= segments.length) break;
+                  buckets.push(Array.from({ length: end - start }, (_, i) => start + i));
               }
 
-              const browser = await chromium.launch({ headless: true });
+              const handled = NUM_BROWSERS * BROWSER_LIMIT;
+              if (segments.length > handled) {
+                  console.log(`⚠️ ${segments.length - handled} segmen melebihi kapasitas ${NUM_BROWSERS} sesi (${handled} max). Sisanya masuk freegen API fallback.\n`);
+                  for (let i = handled; i < segments.length; i++) {
+                      failedQueue.push({
+                          index: i,
+                          prompt: segments[i].image_prompt,
+                          outPath: `release/images/${String(i + 1).padStart(3, "0")}.jpg`
+                      });
+                  }
+              }
 
+              // Thumbnail via freegen API (tidak pakai slot browser)
               if (analysis.thumbnail_prompt) {
-                  console.log("\n--- Generating THUMBNAIL (prioritas pertama, via freegen API) ---");
+                  console.log("--- Generating THUMBNAIL (via freegen API) ---");
                   let ok = await generateFreegenAPI(analysis.thumbnail_prompt, "release/thumbnail.jpg");
                   if (!ok) {
-                      console.log("⚠️ freegen API gagal untuk thumbnail, coba freegen.app Playwright...");
-                      const thumbPage = await browser.newPage();
-                      ok = await generate(thumbPage, analysis.thumbnail_prompt, "release/thumbnail.jpg");
-                      await thumbPage.close();
+                      console.log("⚠️ freegen API gagal, coba via Playwright sesi sementara...");
+                      const tmpCtx  = await launchIncognitoSession(99);
+                      const tmpPage = await tmpCtx.newPage();
+                      ok = await generate(tmpPage, analysis.thumbnail_prompt, "release/thumbnail.jpg");
+                      await tmpCtx.close();
                   }
-                  if (ok) {
-                      console.log("✓ Thumbnail berhasil dibuat\n");
-                  } else {
-                      console.log("⚠️ Thumbnail gagal. Akan dipakai gambar segmen pertama yang sukses sebagai fallback.\n");
-                  }
+                  console.log(ok ? "✓ Thumbnail berhasil\n" : "⚠️ Thumbnail gagal, akan pakai fallback dari segmen pertama\n");
               } else {
-                  console.log("\n⚠️ Tidak ada thumbnail_prompt di analysis.json, skip pembuatan thumbnail.\n");
+                  console.log("⚠️ Tidak ada thumbnail_prompt, skip.\n");
               }
 
-              const queue = Array.from({ length: segments.length }, (_, i) => i);
-              await Promise.all(
-                  Array.from({ length: Math.min(MAX_WORKERS, segments.length) }, (_, i) =>
-                      worker(i + 1, browser, queue)
-                  )
-              );
-              primaryWorkersDone = true;
-              console.log(`\nPrimary workers selesai. Gambar gagal: ${failedQueue.length}`);
+              // Jalankan tiap sesi secara berurutan — sesi baru = identitas baru di mata freegen.app
+              for (let b = 0; b < buckets.length; b++) {
+                  const bucket = buckets[b];
+                  console.log(`\n${"=".repeat(60)}`);
+                  console.log(` SESI ${b + 1}/${buckets.length} — Segmen ${bucket[0] + 1} s/d ${bucket[bucket.length - 1] + 1}`);
+                  console.log("=".repeat(60));
+
+                  const context = await launchIncognitoSession(b);
+                  const queue   = [...bucket];
+
+                  await Promise.all(
+                      Array.from({ length: Math.min(MAX_WORKERS_PER_BROWSER, queue.length) }, (_, i) =>
+                          worker(i + 1, b, context, queue)
+                      )
+                  );
+
+                  await context.close(); // buang semua cookie & session sesi ini
+                  console.log(`✓ Sesi ${b + 1} selesai & ditutup.`);
+              }
+
+              console.log(`\nSemua sesi selesai. Gambar gagal (freegen API retry): ${failedQueue.length}`);
 
               if (failedQueue.length > 0) {
-                  console.log("Menjalankan freegen API untuk drain failedQueue...");
+                  console.log("Menjalankan freegen API fallback...");
                   await freegenAPIWorker();
               }
 
-              await browser.close();
               if (!fs.existsSync("release/thumbnail.jpg")) {
                   const firstAvailable = fs.existsSync("release/images")
                       ? fs.readdirSync("release/images").filter(f => f.endsWith(".jpg")).sort()[0]
                       : null;
                   if (firstAvailable) {
                       fs.copyFileSync(`release/images/${firstAvailable}`, "release/thumbnail.jpg");
-                      console.log(`\n✓ Thumbnail fallback dipakai dari segmen ${firstAvailable}.`);
+                      console.log(`\n✓ Thumbnail fallback dari segmen ${firstAvailable}.`);
                   } else {
-                      console.log("\n⚠️ Tidak ada gambar sama sekali untuk dipakai sebagai fallback thumbnail.");
+                      console.log("\n⚠️ Tidak ada gambar untuk fallback thumbnail.");
                   }
               }
 
               console.log("\nDONE");
           })();
           EOF
-          
+
           node generate-images.js
+
 
       - name: Compile Final Video
         continue-on-error: true
