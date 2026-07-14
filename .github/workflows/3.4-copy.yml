@@ -49,7 +49,7 @@ permissions:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -752,7 +752,7 @@ jobs:
 
           const BROWSER_LIMIT           = 100;
           const NUM_BROWSERS            = 3;
-          const MAX_WORKERS_PER_BROWSER = 2;
+          const MAX_WORKERS_PER_BROWSER = 7;
 
           const USER_AGENTS = [
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -943,6 +943,7 @@ jobs:
           }
 
           (async () => {
+              const startTime = Date.now();
               console.log("\n" + "=".repeat(60));
               console.log(" IMAGE GENERATOR — MULTI-SESI INCOGNITO ");
               console.log("=".repeat(60));
@@ -1027,7 +1028,19 @@ jobs:
                   }
               }
 
-              console.log("\nDONE");
+              const elapsed   = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
+              const allImages = fs.readdirSync("release/images").filter(f => f.endsWith(".jpg"));
+              const allErrors = fs.readdirSync("release/images").filter(f => f.endsWith(".error.txt"));
+
+              console.log("\n" + "=".repeat(60));
+              console.log(" HASIL GENERATE ");
+              console.log("=".repeat(60));
+              console.log(`Total target   : ${segments.length} gambar`);
+              console.log(`Berhasil       : ${allImages.length} gambar`);
+              console.log(`Gagal total    : ${allErrors.length} gambar`);
+              console.log(`Waktu          : ${elapsed} menit`);
+              console.log(`Status         : ${allErrors.length === 0 ? "✓ SEMUA BERHASIL" : `⚠️ ${allErrors.length} GAGAL`}`);
+              console.log("=".repeat(60));
           })();
           EOF
 
