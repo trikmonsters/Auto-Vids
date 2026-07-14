@@ -49,7 +49,7 @@ permissions:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 180
     
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -159,7 +159,6 @@ jobs:
           if not single_paragraphs:
               print("Error: No paragraphs found!"); exit(1)
 
-          # --- Chunking Logic ---
           paragraphs = []
           cur, cur_w = [], 0
           for p in single_paragraphs:
