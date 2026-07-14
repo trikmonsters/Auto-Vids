@@ -86,188 +86,40 @@ jobs:
         run: |
           mkdir -p output release
 
-      - name: Generate script with Elite Narrative Design
+      - name: Generate Narrative via Gemini API
         env:
-          TOPIC_INPUT: ${{ github.event.inputs.topic }}
-          LANGUAGE: ${{ github.event.inputs.language }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          cat > generate-script.js << 'JSEOF'
-          const { chromium } = require('playwright-extra');
-          const stealth = require('puppeteer-extra-plugin-stealth')();
-          chromium.use(stealth);
-          const fs = require('fs');
-
-          const TOPIC = process.env.TOPIC_INPUT || '';
-          const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MIN_WORDS = 1000;
-          const MAX_ATTEMPTS = 3;
-
-          const FULL_PROMPT = `You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} based on this raw topic data: "${TOPIC}"
-
-          STRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):
-          1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.
-          2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to "${TOPIC}" naturally throughout the text. This ensures search engines index the video correctly.
-          3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency. Every paragraph must tightly serve the core premise of "${TOPIC}" without drifting into unrelated psychological sub-topics, ensuring the YouTube algorithm establishes clear niche authority for this channel.
-
-          STRICT NARRATIVE & RETENTION RULES:
-          1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting, preamble, or introduction. Start immediately in the middle of an intense, ongoing psychological simulation or crisis to hook the viewer from second one.
-          2. VALUE RETENTION: To maximize audience retention, the narrative must open by delivering the second-best insight/point of the topic right in the first paragraph.
-          3. Every subsequent paragraph must begin with a cold, piercing psychological insight — NOT a generic question.
-          4. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. Avoid cliché filler phrases.
-
-          STRICT TTS-PIPELINE FORMAT RULES (MICRO-CHUNKING & ANTI-SPEED BUG):
-          1. Every single paragraph MUST begin with an aggressive insight AND be preceded by a specific TTS audio directive bracket.
-          2. CRITICAL VISUAL & SPEED CONTROL: Each paragraph MUST be ultra-short, consisting of ONLY 2 to 3 sentences maximum. Never let sentences pile up into many lines. Immediately hit Enter to start a new paragraph with a new tag.
-          3. Every single tag MUST explicitly include the instruction "STRICTLY SLOW pace" to lock the AI engine's reading speed and prevent it from speeding up over time.
-          4. Output ONLY the narrative text. Target length: 2000+ words.
-
-          CYCLE THROUGH THESE EXACT TAGS FOR THE SCRIPTS:
-          - Paragraph 1 (The Hook): [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]
-          - Next body paragraphs (alternate dynamically between these short 2-3 sentence blocks):
-            * [cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]
-            * [assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]
-            * [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]
-            * [rhetorical tone, STRICTLY SLOW pace, long philosophical pause]
-          - Final Paragraph: [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]
-
-          ---
-          CRITICAL SAFETY VALVE (CONVERSATIONAL KILL-SWITCH):
-          - Do not, under any circumstances, act like a helpful chat assistant at the end.
-          - PROHIBITED: Do not include any out-of-character text, follow-up questions, closing offers, conversational pleasantries, menus, or invitations for discussion.
-          - The final word of the actual story under the [final authoritative tone] tag MUST be the absolute final character of your entire output. Stop generating immediately after that word. 2000+ words.`;
-
-          const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-          async function tryGenerate(attempt) {
-            console.log(`\n[Attempt ${attempt}/${MAX_ATTEMPTS}] Launching browser...`);
-            const browser = await chromium.launch({
-              headless: true,
-              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled', '--incognito']
-            });
-            const context = await browser.newContext({
-              viewport: { width: 1280, height: 1000 },
-              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-              locale: 'id-ID'
-            });
-            const page = await context.newPage();
-
-            try {
-              console.log('Navigating to Google AI Mode...');
-              await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle', timeout: 60000 });
-
-              const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder*="Tanyakan"], textarea[placeholder*="Ask"], textarea[aria-label*="Search"]').first();
-              await chatInput.waitFor({ state: 'visible', timeout: 30000 });
-              console.log('Input ready. Filling prompt...');
-
-              await chatInput.fill(FULL_PROMPT);
-              await chatInput.press('Enter');
-              console.log('Prompt sent. Waiting for response...');
-              await sleep(55000);
-
-              console.log('Polling for full response (max 5 minutes)...');
-              const startTime = Date.now();
-              const TIMEOUT = 300000;
-              let lastLength = 0;
-              let stableCount = 0;
-
-              while (Date.now() - startTime < TIMEOUT) {
-                const bodyText = await page.evaluate(() => document.body.innerText);
-                console.log(bodyText);
-                const currentLength = bodyText.length;
-                console.log(currentLength);
-
-                if (currentLength === lastLength) {
-                  stableCount++;
-                  if (stableCount >= 25) {
-                    console.log('Response appears stable (no new text for 12s).');
-                    break;
-                  }
-                } else {
-                  stableCount = 0;
-                  lastLength = currentLength;
-                }
-
-                await sleep(2000);
-              }
-
-              let responseText = '';
-              const candidates = [
-                '[data-message-author-role="model"] .markdown',
-                '.AI-response-container',
-                '.response-container',
-                'div[jsname] p',
-              ];
-
-              for (const sel of candidates) {
-                const els = await page.locator(sel).all();
-                if (els.length > 0) {
-                  const texts = await Promise.all(els.map(e => e.innerText()));
-                  const joined = texts.join('\n\n').trim();
-                  if (joined.length > responseText.length) responseText = joined;
-                }
-              }
-
-              if (!responseText || responseText.split(/\s+/).length < MIN_WORDS) {
-                const bodyText = await page.evaluate(() => document.body.innerText);
-                const promptIndex = bodyText.indexOf(TOPIC.slice(0, 40));
-                if (promptIndex !== -1) {
-                  responseText = bodyText.slice(promptIndex + TOPIC.length).trim();
-                }
-              }
-
-              const wordCount = responseText.trim().split(/\s+/).length;
-              console.log(`Response captured: ${wordCount} words`);
-
-              if (wordCount < MIN_WORDS) {
-                await page.screenshot({ path: 'debug-aimode.png', fullPage: true });
-                throw new Error(`Response too short: ${wordCount} words (minimum ${MIN_WORDS}). Screenshot saved.`);
-              }
-
-              return responseText.trim();
-            } finally {
-              await browser.close();
+          cat << 'EOF' > request.json
+          {
+            "model": "models/gemini-3.5-flash",
+            "input": "You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${{ github.event.inputs.language }} based on this raw topic data: \"${{ github.event.inputs.topic }}\"\n\nSTRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n\n1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${{ github.event.inputs.topic }}\" naturally throughout the text.\n3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency.\n\nSTRICT NARRATIVE & RETENTION RULES:\n\n1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting.\n2. VALUE RETENTION: Open by delivering the second-best insight.\n3. Every subsequent paragraph must begin with a cold psychological insight.\n4. Treat human emotions as physical phenomena.\n\nSTRICT TTS-PIPELINE FORMAT RULES:\n\n1. Every paragraph begins with a TTS directive.\n2. Every paragraph only 2-3 sentences.\n3. Every tag must contain \"STRICTLY SLOW pace\".\n4. Output ONLY the narrative. Target 2000+ words.\n\nCYCLE THROUGH THESE EXACT TAGS:\n\n- Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n- Alternate:\n[cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n[assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n[chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n[rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n- Final:\n[final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\nCRITICAL SAFETY VALVE:\n- No assistant text.\n- No follow-up.\n- End immediately after the final word.",
+            "generation_config": {
+              "max_output_tokens": 65536,
+              "thinking_level": "high"
             }
           }
-
-          (async () => {
-            console.log('='.repeat(60));
-            console.log(' GENERATE NARRATIVE VIA GOOGLE AI MODE ');
-            console.log('='.repeat(60));
-            console.log(`Topic    : ${TOPIC}`);
-            console.log(`Language : ${LANGUAGE}`);
-
-            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-              try {
-                const narrative = await tryGenerate(attempt);
-                fs.writeFileSync('tts-script.txt', narrative, 'utf8');
-                const wc = narrative.split(/\s+/).length;
-                console.log('\n' + '='.repeat(60));
-                console.log(`✓ Narrative saved to tts-script.txt: ${wc} words`);
-                console.log('='.repeat(60));
-                console.log('\n--- PREVIEW (first 300 chars) ---');
-                console.log(narrative.slice(0, 300) + '...');
-                process.exit(0);
-              } catch (err) {
-                console.error(`Attempt ${attempt} failed: ${err.message}`);
-                if (attempt < MAX_ATTEMPTS) {
-                  const wait = 20 * attempt;
-                  console.log(`Waiting ${wait}s before retry...`);
-                  await sleep(wait * 1000);
-                }
-              }
-            }
-
-            console.error(`::error::Gagal generate narasi setelah ${MAX_ATTEMPTS} percobaan.`);
-            process.exit(1);
-          })();
-          JSEOF
-
-          node generate-script.js
-
-          echo "========================================="
+          EOF
+      
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
+            -d @request.json \
+            -o response.json
+      
+          jq -r '
+            .steps[]
+            | select(.type=="model_output")
+            | .content[]
+            | select(.type=="text")
+            | .text
+          ' response.json > tts-script.txt
+      
+          echo "======================================"
           echo "Generated Words : $(wc -w < tts-script.txt)"
+          echo "======================================"
+      
           cat tts-script.txt
-          echo "========================================="
 
       - name: Generate TTS Audio (REST API & Sequential Safe Mode)
         env:
