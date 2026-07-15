@@ -1,4 +1,4 @@
-name: Vids 3.4 Flash MultiJob
+name: Vids 3.4 Flash MultiJobs
 
 on:
   workflow_dispatch:
@@ -88,7 +88,7 @@ jobs:
           cat << 'EOF' > request.json
           {
             "model": "models/gemini-3.5-flash",
-            "input": "You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${{ github.event.inputs.language }} based on this raw topic data: \"${{ github.event.inputs.topic }}\"\n\nSTRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n\n1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${{ github.event.inputs.topic }}\" naturally throughout the text.\n3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency.\n\nSTRICT NARRATIVE & RETENTION RULES:\n\n1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting.\n2. VALUE RETENTION: Open by delivering the second-best insight.\n3. Every subsequent paragraph must begin with a cold psychological insight.\n4. Treat human emotions as physical phenomena.\n\nSTRICT TTS-PIPELINE FORMAT RULES:\n\n1. Every paragraph begins with a TTS directive.\n2. Every paragraph only 2-3 sentences.\n3. Every tag must contain \"STRICTLY SLOW pace\".\n4. Output ONLY the narrative. Target 2000+ words and Max 3000 words.\n\nCYCLE THROUGH THESE EXACT TAGS:\n\n- Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n- Alternate:\n[cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n[assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n[chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n[rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n- Final:\n[final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\nCRITICAL SAFETY VALVE:\n- No assistant text.\n- No follow-up.\n- End immediately after the final word.",
+            "input": "You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${{ github.event.inputs.language }} based on this raw topic data: \"${{ github.event.inputs.topic }}\"\n\nSTRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n\n1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${{ github.event.inputs.topic }}\" naturally throughout the text.\n3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency.\n\nSTRICT NARRATIVE & RETENTION RULES:\n\n1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting.\n2. VALUE RETENTION: Open by delivering the second-best insight.\n3. Every subsequent paragraph must begin with a cold psychological insight.\n4. Treat human emotions as physical phenomena.\n\nSTRICT TTS-PIPELINE FORMAT RULES:\n\n1. Every paragraph begins with a TTS directive.\n2. Every paragraph only 2-3 sentences.\n3. Every tag must contain \"STRICTLY SLOW pace\".\n4. Output ONLY the narrative. Target 2000+ words.\n\nCYCLE THROUGH THESE EXACT TAGS:\n\n- Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n- Alternate:\n[cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n[assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n[chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n[rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n- Final:\n[final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\nCRITICAL SAFETY VALVE:\n- No assistant text.\n- No follow-up.\n- End immediately after the final word.",
             "generation_config": {
               "max_output_tokens": 65536,
               "thinking_level": "high"
@@ -97,32 +97,65 @@ jobs:
           EOF
 
           API_KEYS=("${GEMINI_API_KEY}" "${GEMINI_API_KEY_2}" "${GEMINI_API_KEY_3}")
+          MODELS=("gemini-3.5-flash" "gemini-3.1-flash-lite")
           SUCCESS=false
+          MAX_RETRY=3
 
           for i in "${!API_KEYS[@]}"; do
             KEY="${API_KEYS[$i]}"
             [ -z "$KEY" ] && continue
-            echo "======================================"
-            echo "Mencoba API Key $((i+1))..."
-            echo "======================================"
-            curl -s -X POST \
-              -H "Content-Type: application/json" \
-              "https://generativelanguage.googleapis.com/v1beta/interactions?key=${KEY}" \
-              -d @request.json \
-              -o response.json
-            WORDS=$(jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json 2>/dev/null | wc -w)
-            if [ "${WORDS:-0}" -gt 100 ] 2>/dev/null; then
-              jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json > tts-script.txt
-              echo "✓ Berhasil dengan Key $((i+1)) — $WORDS kata"
-              SUCCESS=true
-              break
-            else
-              echo "⚠️ Key $((i+1)) gagal atau kuota habis ($(cat response.json | head -c 150))"
-            fi
+
+            for m in "${!MODELS[@]}"; do
+              MODEL="${MODELS[$m]}"
+
+              for retry in $(seq 1 $MAX_RETRY); do
+                echo "======================================"
+                echo "Key $((i+1)) | Model: $MODEL | Retry $retry/$MAX_RETRY"
+                echo "======================================"
+
+                # Update model di request.json
+                jq --arg m "models/$MODEL" '.model = $m' request.json > request_tmp.json && mv request_tmp.json request.json
+
+                curl -s -X POST \
+                  -H "Content-Type: application/json" \
+                  "https://generativelanguage.googleapis.com/v1beta/interactions?key=${KEY}" \
+                  -d @request.json \
+                  -o response.json
+
+                # Cek apakah error 503/overload
+                ERROR_MSG=$(cat response.json | head -c 300)
+                if echo "$ERROR_MSG" | grep -qi "high demand\|overload\|temporarily\|503\|UNAVAILABLE"; then
+                  echo "⚠️ Server overload untuk $MODEL. Tunggu 20 detik lalu retry..."
+                  sleep 20
+                  continue
+                fi
+
+                # Cek apakah error kuota/429
+                if echo "$ERROR_MSG" | grep -qi "quota\|429\|RESOURCE_EXHAUSTED\|rate limit"; then
+                  echo "⚠️ Kuota Key $((i+1)) habis untuk $MODEL, coba model berikutnya..."
+                  break
+                fi
+
+                WORDS=$(jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json 2>/dev/null | wc -w)
+                if [ "${WORDS:-0}" -gt 100 ] 2>/dev/null; then
+                  jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json > tts-script.txt
+                  echo "✓ Berhasil — Key $((i+1)) | Model: $MODEL | $WORDS kata"
+                  SUCCESS=true
+                  break 3
+                else
+                  echo "⚠️ Response tidak valid ($MODEL): $ERROR_MSG"
+                fi
+              done
+
+              [ "$SUCCESS" = "true" ] && break
+            done
+
+            [ "$SUCCESS" = "true" ] && break
+            echo "↩ Semua model Key $((i+1)) gagal, pindah ke Key $((i+2))..."
           done
 
           if [ "$SUCCESS" != "true" ]; then
-            echo "❌ Semua API key gagal. Pipeline dihentikan."
+            echo "❌ Semua API key dan model gagal. Pipeline dihentikan."
             exit 1
           fi
 
@@ -316,6 +349,7 @@ jobs:
           import textwrap
           from google import genai
           from google.genai import types
+          from google.genai import errors as genai_errors
 
           LANGUAGE = os.environ.get("LANGUAGE", "Indonesian")
 
@@ -344,7 +378,6 @@ jobs:
 
           MODEL_LIST = [
               "gemini-3.5-flash",
-              "gemini-3.1-pro-preview",
               "gemini-3.1-flash-lite",
               "gemini-3-flash-preview",
               "gemma-4-26b-a4b-it",
@@ -358,7 +391,7 @@ jobs:
                   for model_name in MODEL_LIST:
                       print(f"[{label}] Round {round_num}/{MAX_ROUNDS} -> mencoba model: {model_name}")
                       try:
-                          response = client.models.generate_content(
+                          response = get_client().models.generate_content(
                               model=model_name,
                               contents=[audio_file, prompt],
                               config=types.GenerateContentConfig(
@@ -379,19 +412,25 @@ jobs:
 
                           print(f"  ✓ [{label}] Berhasil dengan model {model_name} ({len(segments)} segments, total {total_seg_dur:.1f}s)")
                           return data
-                      except Exception as e:
+                      except genai_errors.APIError as e:
+                          last_error = e
+                          if e.code in (503, 500):
+                              print(f"  ⚠️ {model_name} overload (HTTP {e.code}), lanjut ke model berikutnya...")
+                          elif e.code in (429, 403):
+                              rotated = rotate_key("kuota habis")
+                              print(f"  ⚠️ {model_name} kena limit kuota (HTTP {e.code}), {'pindah key' if rotated else 'semua key habis'}")
+                          else:
+                              print(f"  ⚠️ {model_name} APIError {e.code}: {str(e)[:200]}")
+                      except ValueError as e:
                           last_error = e
                           msg = str(e)
-                          if "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
-                              print(f"  ⚠️ {model_name} overload (503/500), lanjut ke model berikutnya...")
-                          elif "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
-                              rotated = rotate_key("kuota habis")
-                              client = get_client()
-                              print(f"  ⚠️ {model_name} kena limit kuota, {'pindah key' if rotated else 'semua key habis'}")
-                          elif "under-segmented" in msg:
+                          if "under-segmented" in msg:
                               print(f"  ⚠️ {model_name}: {msg}, lanjut ke model berikutnya...")
                           else:
-                              print(f"  ⚠️ {model_name} error: {str(e)[:200]}")
+                              print(f"  ⚠️ {model_name} ValueError: {msg[:200]}")
+                      except Exception as e:
+                          last_error = e
+                          print(f"  ⚠️ {model_name} error: {str(e)[:200]}")
 
                   if round_num < MAX_ROUNDS:
                       wait = 30 * round_num
@@ -402,18 +441,12 @@ jobs:
               return {"summary": f"Analisis {label} gagal total setelah semua model & retry dicoba.", "segments": []}
 
           def generate_metadata_with_fallback(prompt, sys_instruction):
-              """
-              Sama mekanisme fallback/retry seperti analyze_chunk, tapi text-only
-              (tidak perlu file audio) -- dipakai khusus untuk generate metadata
-              YouTube (judul/deskripsi/tags) + thumbnail_prompt berdasarkan naskah
-              & summary lengkap, bukan per-segmen.
-              """
               last_error = None
               for round_num in range(1, MAX_ROUNDS + 1):
                   for model_name in MODEL_LIST:
                       print(f"[YouTube Metadata] Round {round_num}/{MAX_ROUNDS} -> mencoba model: {model_name}")
                       try:
-                          response = client.models.generate_content(
+                          response = get_client().models.generate_content(
                               model=model_name,
                               contents=prompt,
                               config=types.GenerateContentConfig(
@@ -438,17 +471,18 @@ jobs:
 
                           print(f"  ✓ [YouTube Metadata] Berhasil dengan model {model_name}")
                           return data
+                      except genai_errors.APIError as e:
+                          last_error = e
+                          if e.code in (503, 500):
+                              print(f"  ⚠️ {model_name} overload (HTTP {e.code}), lanjut ke model berikutnya...")
+                          elif e.code in (429, 403):
+                              rotated = rotate_key("kuota habis")
+                              print(f"  ⚠️ {model_name} kena limit kuota (HTTP {e.code}), {'pindah key' if rotated else 'semua key habis'}")
+                          else:
+                              print(f"  ⚠️ {model_name} APIError {e.code}: {str(e)[:200]}")
                       except Exception as e:
                           last_error = e
-                          msg = str(e)
-                          if "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
-                              print(f"  ⚠️ {model_name} overload (503/500), lanjut ke model berikutnya...")
-                          elif "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
-                              rotated = rotate_key("kuota habis")
-                              client = get_client()
-                              print(f"  ⚠️ {model_name} kena limit kuota, {'pindah key' if rotated else 'semua key habis'}")
-                          else:
-                              print(f"  ⚠️ {model_name} error/hasil tidak valid: {str(e)[:200]}")
+                          print(f"  ⚠️ {model_name} error/hasil tidak valid: {str(e)[:200]}")
 
                   if round_num < MAX_ROUNDS:
                       wait = 30 * round_num
@@ -463,9 +497,21 @@ jobs:
           print("="*70 + "\n")
 
           print("Uploading full audio...")
-          audio = client.files.upload(file="output/audio.wav")
-          print("✓ Upload completed")
-          print(f"{audio.uri}\n")
+          audio = None
+          for _upload_attempt in range(len(_api_keys) * 2):
+              try:
+                  audio = get_client().files.upload(file="output/audio.wav")
+                  print(f"✓ Upload completed: {audio.uri}\n")
+                  break
+              except Exception as _e:
+                  _msg = str(_e)
+                  print(f"⚠️ Upload gagal (Key {_key_idx[0]+1}): {_msg[:120]}")
+                  if "429" in _msg or "RESOURCE_EXHAUSTED" in _msg or "quota" in _msg.lower():
+                      rotate_key("kuota habis saat upload")
+                  time.sleep(10)
+          if audio is None:
+              print("❌ Upload audio gagal di semua key. Pipeline dihentikan.")
+              exit(1)
 
           system_instruction = f"""
           You are an Elite Avant-Garde Creative Director and Master Cyber-Surrealist Artist specializing in world-class 2D modern flat vector illustration for deep psychological, philosophical, and high-intellect cinematic narratives.
