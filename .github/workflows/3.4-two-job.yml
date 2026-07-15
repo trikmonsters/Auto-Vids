@@ -54,6 +54,8 @@ jobs:
 
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+      GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
       TOPIC_INPUT: ${{ github.event.inputs.topic }}
       VOICE_NAME: ${{ github.event.inputs.voice }}
       LANGUAGE: ${{ github.event.inputs.language }}
@@ -82,8 +84,6 @@ jobs:
           mkdir -p output release
 
       - name: Generate Narrative via Gemini API
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           cat << 'EOF' > request.json
           {
@@ -96,51 +96,81 @@ jobs:
           }
           EOF
 
-          curl -s -X POST \
-            -H "Content-Type: application/json" \
-            "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
-            -d @request.json \
-            -o response.json
+          API_KEYS=("${GEMINI_API_KEY}" "${GEMINI_API_KEY_2}" "${GEMINI_API_KEY_3}")
+          SUCCESS=false
 
-          jq -r '
-            .steps[]
-            | select(.type=="model_output")
-            | .content[]
-            | select(.type=="text")
-            | .text
-          ' response.json > tts-script.txt
+          for i in "${!API_KEYS[@]}"; do
+            KEY="${API_KEYS[$i]}"
+            [ -z "$KEY" ] && continue
+            echo "======================================"
+            echo "Mencoba API Key $((i+1))..."
+            echo "======================================"
+            curl -s -X POST \
+              -H "Content-Type: application/json" \
+              "https://generativelanguage.googleapis.com/v1beta/interactions?key=${KEY}" \
+              -d @request.json \
+              -o response.json
+            WORDS=$(jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json 2>/dev/null | wc -w)
+            if [ "${WORDS:-0}" -gt 100 ] 2>/dev/null; then
+              jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json > tts-script.txt
+              echo "✓ Berhasil dengan Key $((i+1)) — $WORDS kata"
+              SUCCESS=true
+              break
+            else
+              echo "⚠️ Key $((i+1)) gagal atau kuota habis ($(cat response.json | head -c 150))"
+            fi
+          done
+
+          if [ "$SUCCESS" != "true" ]; then
+            echo "❌ Semua API key gagal. Pipeline dihentikan."
+            exit 1
+          fi
 
           echo "======================================"
           echo "Generated Words : $(wc -w < tts-script.txt)"
           echo "======================================"
-
           cat tts-script.txt
 
 
       - name: Generate TTS Audio (REST API & Sequential Safe Mode)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
         run: |
           python3 << 'PYEOF'
           import os, re, json, time, textwrap, struct, wave, base64
           import urllib.request
           import urllib.error
 
-          API_KEY        = os.environ["GEMINI_API_KEY"]
+          API_KEYS = [k for k in [
+                          os.environ.get("GEMINI_API_KEY"),
+                          os.environ.get("GEMINI_API_KEY_2"),
+                          os.environ.get("GEMINI_API_KEY_3"),
+                      ] if k]
+          if not API_KEYS:
+              print("❌ Tidak ada API key yang tersedia."); exit(1)
+
+          TTS_MODELS = [
+              "gemini-2.5-flash-preview-tts",
+              "gemini-3.1-flash-tts-preview",
+          ]
+
           VOICE          = os.environ["VOICE_NAME"]
           LANGUAGE_LABEL = os.environ.get("LANGUAGE", "Indonesian")
           GAP            = float(os.environ.get("PARA_GAP", "1"))
-          
+
           SAMPLE_RATE    = 24000
           CHANNELS       = 1
           SAMPLE_WIDTH   = 2
-
-          TARGET_WORDS   = 550 
-          DELAY_SECONDS  = 30  
+          TARGET_WORDS   = 550
+          DELAY_SECONDS  = 30
 
           print("\n" + "="*70)
           print(" GEMINI TTS - REST API & SEQUENTIAL SAFE MODE ")
           print("="*70)
+          print(f"Keys     : {len(API_KEYS)}")
+          print(f"Models   : {TTS_MODELS}")
 
           with open("tts-script.txt", "r", encoding="utf8") as f:
               raw = f.read().strip()
@@ -152,7 +182,6 @@ jobs:
           if not single_paragraphs:
               print("Error: No paragraphs found!"); exit(1)
 
-          # --- Chunking Logic ---
           paragraphs = []
           cur, cur_w = [], 0
           for p in single_paragraphs:
@@ -188,72 +217,63 @@ jobs:
               n = int(SAMPLE_RATE * sec)
               return struct.pack(f"<{n}h", *([0]*n))
 
-          pcm_data = []
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={API_KEY}"
-
-          for i, chunk in enumerate(paragraphs):
-              print("-" * 70)
-              print(f"Mengeksekusi Batch {i+1}/{len(paragraphs)} ({len(chunk.split())} kata)")
-              
-              prompt_text = build_voice_prompt(chunk)
-              
-              # Payload persis seperti format JSON Anda yang berhasil
-              payload = {
-                  "contents": [{
-                      "role": "user",
-                      "parts": [{"text": prompt_text}]
-                  }],
-                  "generationConfig": {
-                      "responseModalities": ["AUDIO"],
-                      "temperature": 0.7,
-                      "speechConfig": {
-                          "voiceConfig": {
-                              "prebuiltVoiceConfig": {
-                                  "voiceName": VOICE
-                              }
-                          }
-                      }
-                  }
-              }
-
+          def try_tts(payload, key, model):
+              url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
               req = urllib.request.Request(
-                  url, 
+                  url,
                   data=json.dumps(payload).encode('utf-8'),
                   headers={'Content-Type': 'application/json'},
                   method='POST'
               )
+              with urllib.request.urlopen(req, timeout=180) as resp:
+                  res_json = json.loads(resp.read())
+              b64 = res_json['candidates'][0]['content']['parts'][0]['inlineData']['data']
+              return base64.b64decode(b64)
+
+          pcm_data = []
+
+          for i, chunk in enumerate(paragraphs):
+              print("-" * 70)
+              print(f"Mengeksekusi Batch {i+1}/{len(paragraphs)} ({len(chunk.split())} kata)")
+
+              payload = {
+                  "contents": [{"role": "user", "parts": [{"text": build_voice_prompt(chunk)}]}],
+                  "generationConfig": {
+                      "responseModalities": ["AUDIO"],
+                      "temperature": 0.7,
+                      "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}
+                  }
+              }
 
               success = False
-              for retry in range(1, 4):
-                  try:
-                      print(f"  [{retry}/3] Mengirim request via REST API...")
-                      with urllib.request.urlopen(req, timeout=180) as response:
-                          res_data = response.read()
-                          res_json = json.loads(res_data)
-                          
-                          # Ekstrak Base64 PCM persis seperti proses jq Anda
-                          base64_audio = res_json['candidates'][0]['content']['parts'][0]['inlineData']['data']
-                          audio_bytes = base64.b64decode(base64_audio)
-                          
+              for key_idx, key in enumerate(API_KEYS):
+                  for model_idx, model in enumerate(TTS_MODELS):
+                      try:
+                          print(f"  [Key {key_idx+1}/{len(API_KEYS)} | Model {model_idx+1}/{len(TTS_MODELS)}: {model}] Mengirim request...")
+                          audio_bytes = try_tts(payload, key, model)
                           pcm_data.append(audio_bytes)
-                          print(f"  ✓ Berhasil mendapatkan {len(audio_bytes)} bytes audio.")
+                          print(f"  ✓ Berhasil dengan Key {key_idx+1} + {model} — {len(audio_bytes)} bytes audio.")
                           success = True
                           break
-                          
-                  except urllib.error.HTTPError as e:
-                      err_msg = e.read().decode('utf-8')
-                      print(f"  ⚠️ HTTP Error {e.code}: {err_msg[:150]}")
-                      if e.code == 429:
-                          print("  ⏳ Terkena limit, tidur ekstra 60 detik...")
-                          time.sleep(60)
-                  except Exception as e:
-                      print(f"  ⚠️ Error tidak terduga: {str(e)}")
-                  
-                  if not success and retry < 3:
-                      time.sleep(15) # Jeda singkat sebelum retry
+                      except urllib.error.HTTPError as e:
+                          err_msg = e.read().decode('utf-8')
+                          print(f"  ⚠️ HTTP {e.code} (Key {key_idx+1} | {model}): {err_msg[:120]}")
+                          if e.code == 503:
+                              print(f"  → Model {model} overload, coba model berikutnya...")
+                          elif e.code == 429 or e.code == 403:
+                              print(f"  → Key {key_idx+1} kuota habis untuk {model}, coba model berikutnya...")
+                          else:
+                              time.sleep(10)
+                      except Exception as e:
+                          print(f"  ⚠️ Error (Key {key_idx+1} | {model}): {str(e)[:120]}")
+                          time.sleep(10)
+                  if success:
+                      break
+                  if key_idx < len(API_KEYS) - 1:
+                      print(f"  ↩ Semua model Key {key_idx+1} gagal, pindah ke Key {key_idx+2}...")
 
               if not success:
-                  print(f"\n❌ FATAL: Batch {i+1} gagal digenerate via API. Pipeline dihentikan.")
+                  print(f"\n❌ FATAL: Batch {i+1} gagal di semua key dan model. Pipeline dihentikan.")
                   exit(1)
 
               # JEDA SEKUENSIAL YANG AMAN
@@ -282,6 +302,8 @@ jobs:
       - name: Analyze Audio (Chunked Process)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           LANGUAGE: ${{ github.event.inputs.language }}
         run: |
           python3 << 'PYEOF'
@@ -297,7 +319,28 @@ jobs:
 
           LANGUAGE = os.environ.get("LANGUAGE", "Indonesian")
 
-          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+          _api_keys = [k for k in [
+              os.environ.get("GEMINI_API_KEY"),
+              os.environ.get("GEMINI_API_KEY_2"),
+              os.environ.get("GEMINI_API_KEY_3"),
+          ] if k]
+          if not _api_keys:
+              print("❌ Tidak ada API key yang tersedia."); exit(1)
+          _key_idx = [0]
+
+          def get_client():
+              return genai.Client(api_key=_api_keys[_key_idx[0]])
+
+          def rotate_key(reason=""):
+              next_idx = (_key_idx[0] + 1) % len(_api_keys)
+              if next_idx != _key_idx[0]:
+                  print(f"  ↩ Key {_key_idx[0]+1} {reason}, pindah ke Key {next_idx+1}...")
+                  _key_idx[0] = next_idx
+                  return True
+              print(f"  ⚠️ Semua key sudah dicoba ({reason})")
+              return False
+
+          client = get_client()
 
           MODEL_LIST = [
               "gemini-3.5-flash",
@@ -342,7 +385,9 @@ jobs:
                           if "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
                               print(f"  ⚠️ {model_name} overload (503/500), lanjut ke model berikutnya...")
                           elif "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
-                              print(f"  ⚠️ {model_name} kena limit kuota (429), lanjut ke model berikutnya...")
+                              rotated = rotate_key("kuota habis")
+                              client = get_client()
+                              print(f"  ⚠️ {model_name} kena limit kuota, {'pindah key' if rotated else 'semua key habis'}")
                           elif "under-segmented" in msg:
                               print(f"  ⚠️ {model_name}: {msg}, lanjut ke model berikutnya...")
                           else:
@@ -399,7 +444,9 @@ jobs:
                           if "503" in msg or "UNAVAILABLE" in msg or "500" in msg:
                               print(f"  ⚠️ {model_name} overload (503/500), lanjut ke model berikutnya...")
                           elif "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
-                              print(f"  ⚠️ {model_name} kena limit kuota (429), lanjut ke model berikutnya...")
+                              rotated = rotate_key("kuota habis")
+                              client = get_client()
+                              print(f"  ⚠️ {model_name} kena limit kuota, {'pindah key' if rotated else 'semua key habis'}")
                           else:
                               print(f"  ⚠️ {model_name} error/hasil tidak valid: {str(e)[:200]}")
 
