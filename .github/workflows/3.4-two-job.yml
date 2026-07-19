@@ -1179,7 +1179,7 @@ jobs:
 
   compile:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     needs: generate
     if: always()
 
@@ -1259,17 +1259,6 @@ jobs:
               FPS = 25
 
               def build_vf(movement, duration):
-                  """
-                  PERBAIKAN UTAMA: zoompan ffmpeg punya bug terkenal kalau sumbernya
-                  gambar statis yang di-loop (-loop 1) -- variabel 'in' (input frame)
-                  TIDAK bertambah per frame, jadi ekspresi yang memakai 'in' (semua
-                  pan_* sebelumnya) menghasilkan posisi statis/diam, bukan bergerak.
-                  Solusi resmi yang direkomendasikan komunitas ffmpeg: pakai 'on'
-                  (output frame number), yang dijamin selalu bertambah per frame.
-                  Kita hitung total_frames secara eksplisit di Python lalu suntikkan
-                  sebagai angka literal ke ekspresi, jadi progress = on/total_frames
-                  selalu 0 -> 1 sepanjang klip, terlepas dari versi ffmpeg.
-                  """
                   total_frames = max(1, int(round(duration * FPS)))
 
                   if "zoom_in" in movement:
