@@ -88,7 +88,7 @@ jobs:
           cat << 'EOF' > request.json
           {
             "model": "models/gemini-3.5-flash",
-            "input": "You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${{ github.event.inputs.language }} based on this raw topic data: \"${{ github.event.inputs.topic }}\"\n\nSTRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n\n1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${{ github.event.inputs.topic }}\" naturally throughout the text.\n3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency.\n\nSTRICT NARRATIVE & RETENTION RULES:\n\n1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting.\n2. VALUE RETENTION: Open by delivering the second-best insight.\n3. Every subsequent paragraph must begin with a cold psychological insight.\n4. Treat human emotions as physical phenomena.\n\nSTRICT TTS-PIPELINE FORMAT RULES:\n\n1. Every paragraph begins with a TTS directive.\n2. Every paragraph only 2-3 sentences.\n3. Every tag must contain \"STRICTLY SLOW pace\".\n4. Output ONLY the narrative. Target 2000+ words and max 3000 words.\n\nCYCLE THROUGH THESE EXACT TAGS:\n\n- Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n- Alternate:\n[cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n[assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n[chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n[rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n- Final:\n[final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\nCRITICAL SAFETY VALVE:\n- No assistant text.\n- No follow-up.\n- End immediately after the final word.",
+            "input": "You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${{ github.event.inputs.language }} based on this raw topic data: \"${{ github.event.inputs.topic }}\"\n\nSTRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n\n1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${{ github.event.inputs.topic }}\" naturally throughout the text.\n3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency.\n\nSTRICT NARRATIVE & RETENTION RULES:\n\n1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting.\n2. VALUE RETENTION: Open by delivering the second-best insight.\n3. Every subsequent paragraph must begin with a cold psychological insight.\n4. Treat human emotions as physical phenomena.\n\nSTRICT TTS-PIPELINE FORMAT RULES:\n\n1. Every paragraph begins with a TTS directive.\n2. Every paragraph only 2-3 sentences.\n3. Every tag must contain \"STRICTLY SLOW pace\".\n4. Output ONLY the narrative. Target 1800+ words and max 2500 word.\n\nCYCLE THROUGH THESE EXACT TAGS:\n\n- Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n- Alternate:\n[cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n[assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n[chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n[rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n- Final:\n[final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\nCRITICAL SAFETY VALVE:\n- No assistant text.\n- No follow-up.\n- End immediately after the final word.",
             "generation_config": {
               "max_output_tokens": 65536,
               "thinking_level": "high"
@@ -848,9 +848,9 @@ jobs:
           );
           const segments = analysis.segments;
 
-          const BROWSER_LIMIT        = 100; // maks gambar per browser sebelum ganti sesi baru
-          const NUM_BROWSERS         = 3;   // 3 sesi = aman sampai 300 gambar
-          const MAX_WORKERS_PER_BROWSER = 7; // tab paralel per sesi (total 2 tab, 1 sesi aktif)
+          const BROWSER_LIMIT        = 100;
+          const NUM_BROWSERS         = 3;
+          const MAX_WORKERS_PER_BROWSER = 7;
 
           // Fingerprint berbeda tiap sesi agar freegen.app menganggap user berbeda
           const USER_AGENTS = [
@@ -1230,7 +1230,7 @@ jobs:
         continue-on-error: true
         run: |
           python3 << 'PYEOF'
-          import json, os, subprocess, sys, shutil, wave
+          import json, os, subprocess, sys, shutil, wave, math
 
           print("\n" + "="*70)
           print(" CONVERTING IMAGES & AUDIO TO 16:9 WIDESCREEN VIDEO ")
@@ -1254,8 +1254,8 @@ jobs:
                   "zoom_blur": "zoomin",
                   "none": "fade",
               }
-              MIN_TRANS_DUR = 0.04   # ~1 frame @25fps, dipakai utk transition_effect "none" (hard cut)
-              MAX_TRANS_DUR = 1.5    # batas atas supaya tidak makan durasi klip pendek
+              MIN_TRANS_DUR = 0.04  
+              MAX_TRANS_DUR = 1.5  
               FPS = 25
 
               def build_vf(movement, duration):
@@ -1284,6 +1284,10 @@ jobs:
               reused_count = 0
               skipped_count = 0
 
+              import concurrent.futures
+
+              # Kumpulkan info segmen dulu (berurutan — butuh last_good_image sequential)
+              seg_tasks = []
               for i, seg in enumerate(segments):
                   idx_str = str(i+1).zfill(3)
                   img_path = f"release/images/{idx_str}.jpg"
@@ -1294,37 +1298,63 @@ jobs:
                   if os.path.exists(img_path):
                       last_good_image = img_path
                   elif last_good_image:
-                      print(f"⚠️ Gambar {idx_str} tidak ada, pakai gambar fallback: {last_good_image}")
                       img_path = last_good_image
                       reused_count += 1
                   else:
-                      print(f"⚠️ Gambar {idx_str} tidak ada dan belum ada fallback — segmen ini dilewati.")
+                      print(f"⚠️ Gambar {idx_str} tidak ada dan belum ada fallback — dilewati.")
                       skipped_count += 1
                       continue
 
-                  segment_video = f"release/seg_{idx_str}.mp4"
-                  movement = seg.get("camera_movement", "static")
-                  vf_effects = build_vf(movement, duration)
+                  seg_tasks.append({
+                      "idx_str": idx_str,
+                      "img_path": img_path,
+                      "duration": duration,
+                      "movement": seg.get("camera_movement", "static"),
+                      "transition_effect": seg.get("transition_effect", "fade"),
+                      "transition_duration": float(seg.get("transition_duration", 0.5) or 0.5),
+                  })
 
+              def encode_segment(task):
+                  idx_str = task["idx_str"]
+                  segment_video = f"release/seg_{idx_str}.mp4"
+                  vf_effects = build_vf(task["movement"], task["duration"])
                   cmd = [
-                      "ffmpeg", "-y", "-loop", "1", "-i", img_path,
-                      "-vf", vf_effects, "-c:v", "libx264", "-t", str(duration),
+                      "ffmpeg", "-y", "-loop", "1", "-i", task["img_path"],
+                      "-vf", vf_effects, "-c:v", "libx264",
+                      "-preset", "medium", "-crf", "19",
+                      "-threads", "2",
+                      "-t", str(task["duration"]),
                       "-pix_fmt", "yuv420p", "-r", str(FPS), segment_video
                   ]
                   result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                   if result.returncode != 0:
-                      print(f"⚠️ ffmpeg gagal di segmen {idx_str}: {result.stderr.decode(errors='ignore')[:200]}")
-                      skipped_count += 1
+                      return None, f"ffmpeg gagal segmen {idx_str}: {result.stderr.decode(errors='ignore')[:150]}"
+                  return segment_video, None
+
+              print(f"Encoding {len(seg_tasks)} segmen paralel (4 workers, preset ultrafast)...")
+              seg_results = {}
+              with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                  future_to_task = {executor.submit(encode_segment, t): t for t in seg_tasks}
+                  for future in concurrent.futures.as_completed(future_to_task):
+                      task = future_to_task[future]
+                      seg_video, err = future.result()
+                      if err:
+                          print(f"⚠️ {err}")
+                          skipped_count += 1
+                      else:
+                          seg_results[task["idx_str"]] = (seg_video, task)
+
+              # Susun clips dalam urutan asli
+              for task in seg_tasks:
+                  if task["idx_str"] not in seg_results:
                       continue
-
-                  trans_effect = seg.get("transition_effect", "fade")
-                  trans_dur = float(seg.get("transition_duration", 0.5) or 0.5)
-                  trans_dur = max(MIN_TRANS_DUR, min(trans_dur, MAX_TRANS_DUR, duration / 2))
-
+                  seg_video, _ = seg_results[task["idx_str"]]
+                  trans_dur = task["transition_duration"]
+                  trans_dur = max(MIN_TRANS_DUR, min(trans_dur, MAX_TRANS_DUR, task["duration"] / 2))
                   clips.append({
-                      "path": segment_video,
-                      "duration": duration,
-                      "transition_effect": trans_effect,
+                      "path": seg_video,
+                      "duration": task["duration"],
+                      "transition_effect": task["transition_effect"],
                       "transition_duration": trans_dur,
                   })
 
@@ -1346,36 +1376,69 @@ jobs:
               if len(clips) == 1:
                   shutil.copy(clips[0]["path"], "release/visual_only.mp4")
               else:
-                  inputs_args = []
-                  for c in clips:
-                      inputs_args += ["-i", c["path"]]
+                  # Chunk xfade per 30 klip agar ffmpeg tidak kehabisan memory/timeout
+                  # Lalu concat semua chunk dengan concat demuxer (cepat, no re-encode)
+                  CHUNK_SIZE = 30
+                  chunk_paths = []
 
-                  filter_parts = []
-                  cum_dur = clips[0]["duration"]
-                  prev_label = "0:v"
-                  for i in range(1, len(clips)):
-                      trans_effect = clips[i - 1]["transition_effect"]
-                      d = clips[i - 1]["transition_duration"]
-                      ttype = TRANSITION_MAP.get(trans_effect, "fade")
+                  def xfade_chunk(chunk_clips, out_path):
+                      inputs_args = []
+                      for c in chunk_clips:
+                          inputs_args += ["-i", c["path"]]
+                      filter_parts = []
+                      cum_dur = chunk_clips[0]["duration"]
+                      prev_label = "0:v"
+                      for i in range(1, len(chunk_clips)):
+                          ttype = TRANSITION_MAP.get(chunk_clips[i-1]["transition_effect"], "fade")
+                          d = chunk_clips[i-1]["transition_duration"]
+                          offset = max(0.0, cum_dur - d)
+                          out_label = f"v{i}"
+                          filter_parts.append(
+                              f"[{prev_label}][{i}:v]xfade=transition={ttype}:duration={d:.3f}:offset={offset:.3f}[{out_label}]"
+                          )
+                          cum_dur = cum_dur + chunk_clips[i]["duration"] - d
+                          prev_label = out_label
+                      cmd = ["ffmpeg", "-y"] + inputs_args + [
+                          "-filter_complex", ";".join(filter_parts),
+                          "-map", f"[{prev_label}]",
+                          "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+                          "-pix_fmt", "yuv420p", "-r", str(FPS), out_path
+                      ]
+                      r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                      if r.returncode != 0:
+                          raise RuntimeError(f"xfade chunk gagal: {r.stderr.decode(errors='ignore')[:300]}")
 
-                      offset = max(0.0, cum_dur - d)
-                      out_label = f"v{i}"
-                      filter_parts.append(
-                          f"[{prev_label}][{i}:v]xfade=transition={ttype}:duration={d:.3f}:offset={offset:.3f}[{out_label}]"
-                      )
-                      cum_dur = cum_dur + clips[i]["duration"] - d
-                      prev_label = out_label
+                  total_chunks = math.ceil(len(clips) / CHUNK_SIZE)
+                  print(f"Membagi {len(clips)} klip ke {total_chunks} chunk (maks {CHUNK_SIZE} klip/chunk)...")
 
-                  filter_complex = ";".join(filter_parts)
-                  xfade_cmd = ["ffmpeg", "-y"] + inputs_args + [
-                      "-filter_complex", filter_complex,
-                      "-map", f"[{prev_label}]",
-                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS),
-                      "release/visual_only.mp4"
-                  ]
-                  result = subprocess.run(xfade_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                  if result.returncode != 0 or not os.path.exists("release/visual_only.mp4"):
-                      raise RuntimeError(f"Gagal membuat transisi xfade: {result.stderr.decode(errors='ignore')[:500]}")
+                  for ci in range(total_chunks):
+                      chunk = clips[ci * CHUNK_SIZE : (ci + 1) * CHUNK_SIZE]
+                      chunk_out = f"release/chunk_{ci:03d}.mp4"
+                      print(f"  xfade chunk {ci+1}/{total_chunks} ({len(chunk)} klip)...")
+                      if len(chunk) == 1:
+                          shutil.copy(chunk[0]["path"], chunk_out)
+                      else:
+                          xfade_chunk(chunk, chunk_out)
+                      chunk_paths.append(chunk_out)
+
+                  if len(chunk_paths) == 1:
+                      shutil.copy(chunk_paths[0], "release/visual_only.mp4")
+                  else:
+                      # Concat semua chunk tanpa re-encode (concat demuxer)
+                      list_file = "release/chunks.txt"
+                      with open(list_file, "w") as f:
+                          for p in chunk_paths:
+                              f.write(f"file '{os.path.abspath(p)}'\n")
+                      concat_cmd = [
+                          "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                          "-i", list_file,
+                          "-c", "copy",
+                          "release/visual_only.mp4"
+                      ]
+                      print(f"Concat {len(chunk_paths)} chunk menjadi visual_only.mp4...")
+                      result = subprocess.run(concat_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                      if result.returncode != 0 or not os.path.exists("release/visual_only.mp4"):
+                          raise RuntimeError(f"Gagal concat chunk: {result.stderr.decode(errors='ignore')[:300]}")
 
               with wave.open("output/audio.wav", "rb") as wf:
                   audio_duration = wf.getnframes() / float(wf.getframerate())
@@ -1396,7 +1459,9 @@ jobs:
                   pad_cmd = [
                       "ffmpeg", "-y", "-i", "release/visual_only.mp4",
                       "-vf", f"tpad=stop_mode=clone:stop_duration={diff:.3f}",
-                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS),
+                      "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+                      "-threads", "0",
+                      "-pix_fmt", "yuv420p", "-r", str(FPS),
                       "release/visual_padded.mp4"
                   ]
                   result = subprocess.run(pad_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
