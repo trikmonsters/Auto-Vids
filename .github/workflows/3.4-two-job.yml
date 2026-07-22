@@ -97,7 +97,7 @@ jobs:
           EOF
 
           API_KEYS=("${GEMINI_API_KEY}" "${GEMINI_API_KEY_2}" "${GEMINI_API_KEY_3}")
-          MODELS=("gemini-3.5-flash" "gemini-3.1-flash-lite")
+          MODELS=("gemini-3.6-flash" "gemini-3.5-flash" "gemini-3.1-flash-lite" "gemini-3-flash-preview")
           SUCCESS=false
           MAX_RETRY=3
 
@@ -382,6 +382,7 @@ jobs:
               return False
 
           MODEL_LIST = [
+              "gemini-3.6-flash",
               "gemini-3.1-flash-lite",
               "gemini-3-flash-preview",
               "gemini-3.5-flash",
@@ -879,9 +880,10 @@ jobs:
           );
           const segments = analysis.segments;
 
-          const BROWSER_LIMIT        = 100;
-          const NUM_BROWSERS         = 3;   
-          const MAX_WORKERS_PER_BROWSER = 7; 
+          const BROWSER_LIMIT           = 100;
+          const NUM_BROWSERS            = 3;
+          const MAX_WORKERS_PER_BROWSER = 7;
+          const DELAY_AFTER_BATCH_MS    = 5 * 60 * 1000;
 
           // Fingerprint berbeda tiap sesi agar freegen.app menganggap user berbeda
           const USER_AGENTS = [
@@ -1076,6 +1078,10 @@ jobs:
                       console.log(`⚠️ Segmen ${job.index + 1} gagal total.`);
                   }
                   processed++;
+                  if (processed % 99 === 0 && failedQueue.length > 0) {
+                      console.log(`\n⏳ [FallbackAPI] ${processed} gambar selesai — delay ${DELAY_AFTER_BATCH_MS / 60000} menit sebelum lanjut...`);
+                      await sleep(DELAY_AFTER_BATCH_MS);
+                  }
               }
               if (processed > 0) console.log(`\n[FallbackAPI] Selesai memproses ${processed} gambar.`);
           }
@@ -1145,8 +1151,12 @@ jobs:
                       )
                   );
 
-                  await context.close(); // tutup + buang semua cookie/session sesi ini
+                  await context.close();
                   console.log(`✓ Sesi ${b + 1} selesai & ditutup.`);
+                  if (b < buckets.length - 1) {
+                      console.log(`\n⏳ Delay ${DELAY_AFTER_BATCH_MS / 60000} menit sebelum sesi berikutnya (bypass rate limit freegen.app)...`);
+                      await sleep(DELAY_AFTER_BATCH_MS);
+                  }
               }
 
               console.log(`\nSemua sesi selesai. Gambar gagal (freegen API retry): ${failedQueue.length}`);
@@ -1286,11 +1296,21 @@ jobs:
                   "none": "fade",
               }
               MIN_TRANS_DUR = 0.04   # ~1 frame @25fps, dipakai utk transition_effect "none" (hard cut)
-              MAX_TRANS_DUR = 1.5    
-              FPS = 30
+              MAX_TRANS_DUR = 1.5    # batas atas supaya tidak makan durasi klip pendek
+              FPS = 25
 
               def build_vf(movement, duration):
-                  
+                  """
+                  PERBAIKAN UTAMA: zoompan ffmpeg punya bug terkenal kalau sumbernya
+                  gambar statis yang di-loop (-loop 1) -- variabel 'in' (input frame)
+                  TIDAK bertambah per frame, jadi ekspresi yang memakai 'in' (semua
+                  pan_* sebelumnya) menghasilkan posisi statis/diam, bukan bergerak.
+                  Solusi resmi yang direkomendasikan komunitas ffmpeg: pakai 'on'
+                  (output frame number), yang dijamin selalu bertambah per frame.
+                  Kita hitung total_frames secara eksplisit di Python lalu suntikkan
+                  sebagai angka literal ke ekspresi, jadi progress = on/total_frames
+                  selalu 0 -> 1 sepanjang klip, terlepas dari versi ffmpeg.
+                  """
                   total_frames = max(1, int(round(duration * FPS)))
 
                   if "zoom_in" in movement:
@@ -1353,7 +1373,7 @@ jobs:
                   cmd = [
                       "ffmpeg", "-y", "-loop", "1", "-i", task["img_path"],
                       "-vf", vf_effects, "-c:v", "libx264",
-                      "-preset", "medium", "-crf", "19",
+                      "-preset", "ultrafast", "-crf", "23",
                       "-threads", "2",
                       "-t", str(task["duration"]),
                       "-pix_fmt", "yuv420p", "-r", str(FPS), segment_video
@@ -1363,7 +1383,7 @@ jobs:
                       return None, f"ffmpeg gagal segmen {idx_str}: {result.stderr.decode(errors='ignore')[:150]}"
                   return segment_video, None
 
-              print(f"Encoding {len(seg_tasks)} segmen paralel (4 workers, preset medium)...")
+              print(f"Encoding {len(seg_tasks)} segmen paralel (4 workers, preset ultrafast)...")
               seg_results = {}
               with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                   future_to_task = {executor.submit(encode_segment, t): t for t in seg_tasks}
@@ -1433,7 +1453,7 @@ jobs:
                       cmd = ["ffmpeg", "-y"] + inputs_args + [
                           "-filter_complex", ";".join(filter_parts),
                           "-map", f"[{prev_label}]",
-                          "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+                          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                           "-pix_fmt", "yuv420p", "-r", str(FPS), out_path
                       ]
                       r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -1491,7 +1511,7 @@ jobs:
                   pad_cmd = [
                       "ffmpeg", "-y", "-i", "release/visual_only.mp4",
                       "-vf", f"tpad=stop_mode=clone:stop_duration={diff:.3f}",
-                      "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+                      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                       "-threads", "0",
                       "-pix_fmt", "yuv420p", "-r", str(FPS),
                       "release/visual_padded.mp4"
