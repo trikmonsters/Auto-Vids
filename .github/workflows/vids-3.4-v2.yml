@@ -85,10 +85,31 @@ jobs:
 
       - name: Generate Narrative via Gemini API
         run: |
-          cat << 'EOF' > request.json
+          LANGUAGE="${{ github.event.inputs.language }}"
+          TOPIC="${{ github.event.inputs.topic }}"
+          API_KEYS=("${GEMINI_API_KEY}" "${GEMINI_API_KEY_2}" "${GEMINI_API_KEY_3}")
+          MODELS=("gemini-3.6-flash" "gemini-3.5-flash" "gemini-3.1-flash-lite" "gemini-3-flash-preview")
+          SUCCESS=false
+          MAX_RETRY=3
+          mkdir -p release
+
+          PROMPT="You are an elite YouTube Growth Strategist, behavioral scientist, and psychological narrative designer.
+
+          Based on this topic: \"${TOPIC}\"
+          Language: ${LANGUAGE}
+          
+          Produce a single JSON object with exactly these two fields:
+          
+          1. \"narrative\": A highly immersive psychological narrative (2000+ words max -2500 words) in fluent ${LANGUAGE}. Rules: start in the middle (no greeting), every paragraph 2-3 sentences preceded by a TTS tag containing STRICTLY SLOW pace, cycle through these tags: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery] / [cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses] / [assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence] / [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery] / [rhetorical tone, STRICTLY SLOW pace, long philosophical pause] / [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]. Rooted in real psychology and cognitive science. No assistant text, no follow-up.
+          
+          2. \"metadata\": A JSON object with: youtube_title (50-70 chars, provocative, SEO-strong, honest), youtube_description (150-300 words, first 2 sentences = hook, 3-5 keywords, end with CTA), youtube_tags (12-20 tags most-relevant first), thumbnail_prompt (400-700 chars: 2D stickman scene, white background, black line art only, LEFT 40% bold ALL-CAPS hook text in ${LANGUAGE} 2-3 lines, RIGHT 60% stickman scene uniquely illustrating this exact topic with 1-2 relevant props and a short label in ${LANGUAGE}). Use these analysis frameworks: long-tail SEO queries, anti-topic chaos consistency, psychological hook from the most counterintuitive insight, audience intent alignment.
+          
+          Output ONLY valid JSON: {\"narrative\": \"...\", \"metadata\": {\"youtube_title\": \"...\", \"youtube_description\": \"...\", \"youtube_tags\": [...], \"thumbnail_prompt\": \"...\"}}"
+
+          cat > request.json << EOF
           {
             "model": "models/gemini-3.5-flash",
-            "input": "You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${{ github.event.inputs.language }} based on this raw topic data: \"${{ github.event.inputs.topic }}\"\n\nSTRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n\n1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${{ github.event.inputs.topic }}\" naturally throughout the text.\n3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency.\n\nSTRICT NARRATIVE & RETENTION RULES:\n\n1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting.\n2. VALUE RETENTION: Open by delivering the second-best insight.\n3. Every subsequent paragraph must begin with a cold psychological insight.\n4. Treat human emotions as physical phenomena.\n\nSTRICT TTS-PIPELINE FORMAT RULES:\n\n1. Every paragraph begins with a TTS directive.\n2. Every paragraph only 2-3 sentences.\n3. Every tag must contain \"STRICTLY SLOW pace\".\n4. Output ONLY the narrative. Target 1900+ words max -2500 words.\n\nCYCLE THROUGH THESE EXACT TAGS:\n\n- Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n- Alternate:\n[cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n[assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n[chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n[rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n- Final:\n[final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\nCRITICAL SAFETY VALVE:\n- No assistant text.\n- No follow-up.\n- End immediately after the final word.",
+            "input": "${PROMPT//"/\"}",
             "generation_config": {
               "max_output_tokens": 65536,
               "thinking_level": "high"
@@ -96,60 +117,42 @@ jobs:
           }
           EOF
 
-          API_KEYS=("${GEMINI_API_KEY}" "${GEMINI_API_KEY_2}" "${GEMINI_API_KEY_3}")
-          MODELS=("gemini-3.6-flash" "gemini-3.5-flash" "gemini-3.1-flash-lite" "gemini-3-flash-preview")
-          SUCCESS=false
-          MAX_RETRY=3
-
           for i in "${!API_KEYS[@]}"; do
             KEY="${API_KEYS[$i]}"
             [ -z "$KEY" ] && continue
-
             for m in "${!MODELS[@]}"; do
               MODEL="${MODELS[$m]}"
-
               for retry in $(seq 1 $MAX_RETRY); do
                 echo "======================================"
                 echo "Key $((i+1)) | Model: $MODEL | Retry $retry/$MAX_RETRY"
                 echo "======================================"
-
-                # Update model di request.json
                 jq --arg m "models/$MODEL" '.model = $m' request.json > request_tmp.json && mv request_tmp.json request.json
-
-                curl -s -X POST \
-                  -H "Content-Type: application/json" \
-                  "https://generativelanguage.googleapis.com/v1beta/interactions?key=${KEY}" \
-                  -d @request.json \
-                  -o response.json
-
-                # Cek apakah error 503/overload
+                curl -s -X POST                   -H "Content-Type: application/json"                   "https://generativelanguage.googleapis.com/v1beta/interactions?key=${KEY}"                   -d @request.json                   -o response.json
                 ERROR_MSG=$(cat response.json | head -c 300)
                 if echo "$ERROR_MSG" | grep -qi "high demand\|overload\|temporarily\|503\|UNAVAILABLE"; then
-                  echo "⚠️ Server overload untuk $MODEL. Tunggu 20 detik lalu retry..."
-                  sleep 20
-                  continue
+                  echo "⚠️ Overload $MODEL, tunggu 20 detik..."
+                  sleep 20; continue
                 fi
-
-                # Cek apakah error kuota/429
                 if echo "$ERROR_MSG" | grep -qi "quota\|429\|RESOURCE_EXHAUSTED\|rate limit"; then
-                  echo "⚠️ Kuota Key $((i+1)) habis untuk $MODEL, coba model berikutnya..."
+                  echo "⚠️ Kuota Key $((i+1)) habis, coba model berikutnya..."
                   break
                 fi
-
-                WORDS=$(jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json 2>/dev/null | wc -w)
+                RAW=$(jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json 2>/dev/null)
+                NARRATIVE=$(echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('narrative',''))" 2>/dev/null)
+                WORDS=$(echo "$NARRATIVE" | wc -w)
                 if [ "${WORDS:-0}" -gt 100 ] 2>/dev/null; then
-                  jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json > tts-script.txt
+                  echo "$NARRATIVE" > tts-script.txt
+                  echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); json.dump(d.get('metadata',{}), sys.stdout, ensure_ascii=False)" 2>/dev/null > release/metadata.json
                   echo "✓ Berhasil — Key $((i+1)) | Model: $MODEL | $WORDS kata"
+                  echo "  Judul: $(jq -r '.youtube_title' release/metadata.json)"
                   SUCCESS=true
                   break 3
                 else
-                  echo "⚠️ Response tidak valid ($MODEL): $ERROR_MSG"
+                  echo "⚠️ Response tidak valid atau narrative kosong"
                 fi
               done
-
               [ "$SUCCESS" = "true" ] && break
             done
-
             [ "$SUCCESS" = "true" ] && break
             echo "↩ Semua model Key $((i+1)) gagal, pindah ke Key $((i+2))..."
           done
@@ -185,8 +188,8 @@ jobs:
               print("❌ Tidak ada API key yang tersedia."); exit(1)
 
           TTS_MODELS = [
-              "gemini-3.1-flash-tts-preview",
               "gemini-2.5-flash-preview-tts",
+              "gemini-3.1-flash-tts-preview",
           ]
 
           VOICE          = os.environ["VOICE_NAME"]
@@ -273,7 +276,7 @@ jobs:
                   "contents": [{"role": "user", "parts": [{"text": build_voice_prompt(chunk)}]}],
                   "generationConfig": {
                       "responseModalities": ["AUDIO"],
-                      "temperature": 0.7,
+                      "temperature": 0.8,
                       "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}
                   }
               }
@@ -362,9 +365,6 @@ jobs:
               print("❌ Tidak ada API key yang tersedia."); exit(1)
           _key_idx = [0]
 
-          # Sesuai dokumentasi resmi: satu client instance per key
-          # genai.Client(api_key=KEY) — dibuat sekali, dipakai sampai kena limit
-          # rotate_key() membuat client baru dengan key berikutnya
           client = genai.Client(api_key=_api_keys[0])
           _active_client = [client]
 
@@ -382,6 +382,7 @@ jobs:
               return False
 
           MODEL_LIST = [
+              "gemini-3.6-flash",
               "gemini-3.1-flash-lite",
               "gemini-3-flash-preview",
               "gemini-3.5-flash",
@@ -475,58 +476,6 @@ jobs:
               print(f"[{label}] ⚠️ GAGAL TOTAL setelah {MAX_ROUNDS} putaran x {len(MODEL_LIST)} model. Error terakhir: {last_error}")
               return {"summary": f"Analisis {label} gagal total setelah semua model & retry dicoba.", "segments": []}
 
-          def generate_metadata_with_fallback(prompt, sys_instruction):
-              last_error = None
-              for round_num in range(1, MAX_ROUNDS + 1):
-                  for model_name in MODEL_LIST:
-                      print(f"[YouTube Metadata] Round {round_num}/{MAX_ROUNDS} -> mencoba model: {model_name}")
-                      try:
-                          response = get_client().models.generate_content(
-                              model=model_name,
-                              contents=prompt,
-                              config=types.GenerateContentConfig(
-                                  system_instruction=sys_instruction,
-                                  response_mime_type="application/json"
-                              )
-                          )
-                          data = json.loads(response.text)
-                          title = (data.get("youtube_title") or "").strip()
-                          desc = (data.get("youtube_description") or "").strip()
-                          tags = data.get("youtube_tags") or []
-                          thumb = (data.get("thumbnail_prompt") or "").strip()
-
-                          if len(title) < 10:
-                              raise ValueError("youtube_title terlalu pendek/kosong")
-                          if len(desc) < 80:
-                              raise ValueError("youtube_description terlalu pendek/kosong")
-                          if len(tags) < 5:
-                              raise ValueError("youtube_tags terlalu sedikit (<5)")
-                          if len(thumb) < 300:
-                              raise ValueError("thumbnail_prompt terlalu pendek/kosong")
-
-                          print(f"  ✓ [YouTube Metadata] Berhasil dengan model {model_name}")
-                          return data
-                      except genai_errors.APIError as e:
-                          last_error = e
-                          if e.code in (503, 500):
-                              print(f"  ⚠️ {model_name} overload (HTTP {e.code}), lanjut ke model berikutnya...")
-                          elif e.code in (429, 403):
-                              rotated = rotate_key("kuota habis")
-                              print(f"  ⚠️ {model_name} kena limit kuota (HTTP {e.code}), {'pindah key' if rotated else 'semua key habis'}")
-                          else:
-                              print(f"  ⚠️ {model_name} APIError {e.code}: {str(e)[:200]}")
-                      except Exception as e:
-                          last_error = e
-                          print(f"  ⚠️ {model_name} error/hasil tidak valid: {str(e)[:200]}")
-
-                  if round_num < MAX_ROUNDS:
-                      wait = 30 * round_num
-                      print(f"[YouTube Metadata] Semua model gagal di round {round_num}. Menunggu {wait}s lalu mengulang...")
-                      time.sleep(wait)
-
-              print(f"[YouTube Metadata] ⚠️ GAGAL TOTAL setelah {MAX_ROUNDS} putaran. Error terakhir: {last_error}")
-              return None
-
           print("\n" + "="*70)
           print(" AUDIO ANALYSIS (CHUNKED OMIT LIMIT MODE) ")
           print("="*70 + "\n")
@@ -573,7 +522,7 @@ jobs:
           Strictly output ONLY valid JSON matching the exact schema provided. No markdown wrappers.
           """
 
-          base_prompt_template          base_prompt_template = """
+          base_prompt_template = """
           Analyze the specified part of this narration audio.
           Break the timeline into MANY short, sequential segments with precise timestamps.
           CRITICAL FOCUS: You must ONLY analyze the part of the audio that matches this text section:
@@ -698,78 +647,17 @@ jobs:
 
           combined_summary = " | ".join(summary_parts)
 
-          metadata_system_instruction = f"""
-          You are an elite YouTube growth strategist, SEO copywriter, and stickman thumbnail art director for a psychology channel.
-          Produce YouTube metadata AND a thumbnail that is clickbait-honest — genuinely curiosity-inducing but never misleading.
 
-          OUTPUT LANGUAGE: All fields and thumbnail text in fluent native-level {LANGUAGE}.
-
-          TITLE: 50-70 chars. Provocative claim or question the video genuinely answers. Strong SEO.
-          DESCRIPTION: 150-300 words. First 2 sentences = hook. 3-5 keywords naturally woven. End with CTA.
-          TAGS: 12-20 tags, most-relevant first, mix {LANGUAGE} and English.
-
-          THUMBNAIL_PROMPT RULES:
-          - Same 2D stickman style as the video. Unique to THIS topic — never a generic template.
-          - Pure white background. Black line art only. No color fills.
-          - LEFT 40%: Bold ALL-CAPS text in {LANGUAGE}. 2-3 short punchy hook lines. Emotionally charged, directly relevant to this video's core reveal.
-          - RIGHT 60%: Stickman scene that LITERALLY and UNIQUELY illustrates this video's core concept. Invent a specific situation that could only belong to THIS topic. If video is about dopamine: stickman chained to phone with loop arrow. If about social anxiety: stickman shrinking while crowd grows taller. If about manipulation: puppet strings from one stickman controlling another.
-          - 1-2 simple stick-art props relevant to topic.
-          - One short label or thought bubble in {LANGUAGE} near stickman reinforcing the hook.
-          - Composition must feel fresh and specific — viewer immediately knows this video's topic.
-          - thumbnail_prompt: 400-700 characters. Direct and implementable. No art theory terms.
-
-          Strictly output ONLY valid JSON. No markdown wrappers.
-          """
-
-          metadata_prompt          metadata_prompt = """
-          Here is the full narration script for this video:
-          \"\"\"{raw_script}\"\"\"
-
-          Here is the combined psychological analysis summary across all sections:
-          \"\"\"{combined_summary}\"\"\"
-
-          Based on the FULL content above, generate YouTube upload metadata and a special thumbnail concept following the Art Director brief in your system instructions exactly.
-
-          Output must strictly follow this JSON structure:
-          {{
-            "youtube_title": "...",
-            "youtube_description": "...",
-            "youtube_tags": ["tag1", "tag2", "..."],
-            "thumbnail_prompt": "..."
-          }}
-          """.format(raw_script=raw_script, combined_summary=combined_summary)
-
-          print("\n" + "="*70)
-          print(" GENERATING YOUTUBE METADATA & THUMBNAIL PROMPT ")
-          print("="*70)
-
-          metadata = generate_metadata_with_fallback(metadata_prompt, metadata_system_instruction)
-
-          if not metadata:
-              print("⚠️ Memakai metadata fallback generik karena semua model gagal.")
-              metadata = {
-                  "youtube_title": (raw_script.split(".")[0].strip()[:65] if raw_script else "A Deep Psychological Narrative"),
-                  "youtube_description": "An immersive psychological narrative exploring the depths of the human mind, the subconscious, and the hidden architecture of our thoughts.",
-                  "youtube_tags": ["psychology", "human behavior", "mind", "subconscious", "deep narrative", "philosophy"],
-                  "thumbnail_prompt": "2D stickman scene, white background, black line art. Single stickman standing at a crossroads with two arrows pointing different directions, question mark thought bubble above head. LEFT side bold ALL-CAPS text in {LANGUAGE}: two short hook lines about the video topic. Simple stick-art props: small signpost, dotted path lines. No color, no shading."
-              }
-
-          def clamp_text(text, max_len):
-              """Pengaman: kalau teks kepanjangan, potong di akhir kalimat terdekat
-              di bawah batas -- supaya tidak berisiko ditolak situs generator gambar
-              karena melewati limit panjang yang tidak kita ketahui pasti."""
-              text = (text or "").strip()
-              if len(text) <= max_len:
-                  return text
-              cut = text[:max_len]
-              last_period = cut.rfind(". ")
-              return cut[:last_period + 1] if last_period > max_len * 0.6 else cut
-
-          metadata["thumbnail_prompt"] = clamp_text(metadata.get("thumbnail_prompt", ""), 2600)
-
-          print(f"Judul       : {metadata.get('youtube_title','')}")
-          print(f"Tags        : {len(metadata.get('youtube_tags', []))} tags")
-          print(f"Thumbnail   : {len(metadata.get('thumbnail_prompt',''))} karakter\n")
+          # Load metadata dari Generate Narrative step (sudah digenerate bersamaan narasi)
+          metadata = {}
+          try:
+              with open("release/metadata.json", "r", encoding="utf8") as mf:
+                  metadata = json.load(mf)
+              print(f"✓ Metadata loaded dari release/metadata.json")
+              print(f"  Judul : {metadata.get('youtube_title','(kosong)')}")
+              print(f"  Tags  : {len(metadata.get('youtube_tags', []))} tags")
+          except Exception as e:
+              print(f"⚠️ Gagal load metadata.json: {e} — akan pakai fallback kosong")
 
           final_analysis = {
               "summary": combined_summary,
@@ -1223,17 +1111,6 @@ jobs:
               FPS = 25
 
               def build_vf(movement, duration):
-                  """
-                  PERBAIKAN UTAMA: zoompan ffmpeg punya bug terkenal kalau sumbernya
-                  gambar statis yang di-loop (-loop 1) -- variabel 'in' (input frame)
-                  TIDAK bertambah per frame, jadi ekspresi yang memakai 'in' (semua
-                  pan_* sebelumnya) menghasilkan posisi statis/diam, bukan bergerak.
-                  Solusi resmi yang direkomendasikan komunitas ffmpeg: pakai 'on'
-                  (output frame number), yang dijamin selalu bertambah per frame.
-                  Kita hitung total_frames secara eksplisit di Python lalu suntikkan
-                  sebagai angka literal ke ekspresi, jadi progress = on/total_frames
-                  selalu 0 -> 1 sepanjang klip, terlepas dari versi ffmpeg.
-                  """
                   total_frames = max(1, int(round(duration * FPS)))
 
                   if "zoom_in" in movement:
@@ -1542,7 +1419,7 @@ jobs:
                       "title": title,
                       "description": description,
                       "tags": tags,
-                      "categoryId": "27",
+                      "categoryId": "27",  # Education -- ganti sesuai kebutuhan
                   },
                   "status": {
                       "privacyStatus": privacy_status,
