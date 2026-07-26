@@ -1,0 +1,1626 @@
+name: Vids 3.4 Flash V2
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Masukkan Judul atau Topik Narasi (Psychology)"
+        required: true
+        type: string
+      language:
+        description: "Bahasa narasi, audio, metadata & thumbnail"
+        required: false
+        type: choice
+        options:
+          - Indonesian
+          - English
+        default: "English"
+      voice:
+        description: "Gemini Voice — untuk English pilih Aoede/Puck, untuk Indonesian pilih Sulafat/Leda"
+        required: false
+        type: choice
+        options:
+          - Aoede
+          - Puck
+          - Sulafat
+          - Leda
+          - Kore
+          - Charon
+          - Fenrir
+          - Schedar
+        default: "Aoede"
+      paragraph_gap:
+        description: "Gap antar paragraf (detik)"
+        required: false
+        default: "1"
+      youtube_privacy:
+        description: "Status privasi video YouTube"
+        required: false
+        type: choice
+        options:
+          - private
+          - unlisted
+          - public
+        default: "public"
+
+permissions:
+  contents: write
+
+jobs:
+
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+      GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+      TOPIC_INPUT: ${{ github.event.inputs.topic }}
+      VOICE_NAME: ${{ github.event.inputs.voice }}
+      LANGUAGE: ${{ github.event.inputs.language }}
+      PARA_GAP: ${{ github.event.inputs.paragraph_gap }}
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-genai google-api-python-client google-auth google-auth-oauthlib
+
+      - name: Setup Node.js and Install Dependencies
+        run: |
+          npm init -y
+          npm install playwright sharp ws
+          npx playwright install chromium
+
+      - name: Prepare Workspace
+        run: |
+          mkdir -p output release
+
+      - name: Generate Narrative via Gemini API
+        run: |
+          cat << 'EOF' > request.json
+          {
+            "model": "models/gemini-3.5-flash",
+            "input": "You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${{ github.event.inputs.language }} based on this raw topic data: \"${{ github.event.inputs.topic }}\"\n\nSTRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n\n1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${{ github.event.inputs.topic }}\" naturally throughout the text.\n3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency.\n\nSTRICT NARRATIVE & RETENTION RULES:\n\n1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting.\n2. VALUE RETENTION: Open by delivering the second-best insight.\n3. Every subsequent paragraph must begin with a cold psychological insight.\n4. Treat human emotions as physical phenomena.\n\nSTRICT TTS-PIPELINE FORMAT RULES:\n\n1. Every paragraph begins with a TTS directive.\n2. Every paragraph only 2-3 sentences.\n3. Every tag must contain \"STRICTLY SLOW pace\".\n4. Output ONLY the narrative. Target 1900+ words max -2500 words.\n\nCYCLE THROUGH THESE EXACT TAGS:\n\n- Paragraph 1: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n- Alternate:\n[cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n[assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n[chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n[rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n- Final:\n[final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\nCRITICAL SAFETY VALVE:\n- No assistant text.\n- No follow-up.\n- End immediately after the final word.",
+            "generation_config": {
+              "max_output_tokens": 65536,
+              "thinking_level": "high"
+            }
+          }
+          EOF
+
+          API_KEYS=("${GEMINI_API_KEY}" "${GEMINI_API_KEY_2}" "${GEMINI_API_KEY_3}")
+          MODELS=("gemini-3.6-flash" "gemini-3.5-flash" "gemini-3.1-flash-lite" "gemini-3-flash-preview")
+          SUCCESS=false
+          MAX_RETRY=3
+
+          for i in "${!API_KEYS[@]}"; do
+            KEY="${API_KEYS[$i]}"
+            [ -z "$KEY" ] && continue
+
+            for m in "${!MODELS[@]}"; do
+              MODEL="${MODELS[$m]}"
+
+              for retry in $(seq 1 $MAX_RETRY); do
+                echo "======================================"
+                echo "Key $((i+1)) | Model: $MODEL | Retry $retry/$MAX_RETRY"
+                echo "======================================"
+
+                # Update model di request.json
+                jq --arg m "models/$MODEL" '.model = $m' request.json > request_tmp.json && mv request_tmp.json request.json
+
+                curl -s -X POST \
+                  -H "Content-Type: application/json" \
+                  "https://generativelanguage.googleapis.com/v1beta/interactions?key=${KEY}" \
+                  -d @request.json \
+                  -o response.json
+
+                # Cek apakah error 503/overload
+                ERROR_MSG=$(cat response.json | head -c 300)
+                if echo "$ERROR_MSG" | grep -qi "high demand\|overload\|temporarily\|503\|UNAVAILABLE"; then
+                  echo "⚠️ Server overload untuk $MODEL. Tunggu 20 detik lalu retry..."
+                  sleep 20
+                  continue
+                fi
+
+                # Cek apakah error kuota/429
+                if echo "$ERROR_MSG" | grep -qi "quota\|429\|RESOURCE_EXHAUSTED\|rate limit"; then
+                  echo "⚠️ Kuota Key $((i+1)) habis untuk $MODEL, coba model berikutnya..."
+                  break
+                fi
+
+                WORDS=$(jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json 2>/dev/null | wc -w)
+                if [ "${WORDS:-0}" -gt 100 ] 2>/dev/null; then
+                  jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json > tts-script.txt
+                  echo "✓ Berhasil — Key $((i+1)) | Model: $MODEL | $WORDS kata"
+                  SUCCESS=true
+                  break 3
+                else
+                  echo "⚠️ Response tidak valid ($MODEL): $ERROR_MSG"
+                fi
+              done
+
+              [ "$SUCCESS" = "true" ] && break
+            done
+
+            [ "$SUCCESS" = "true" ] && break
+            echo "↩ Semua model Key $((i+1)) gagal, pindah ke Key $((i+2))..."
+          done
+
+          if [ "$SUCCESS" != "true" ]; then
+            echo "❌ Semua API key dan model gagal. Pipeline dihentikan."
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "Generated Words : $(wc -w < tts-script.txt)"
+          echo "======================================"
+          cat tts-script.txt
+
+
+      - name: Generate TTS Audio (REST API & Sequential Safe Mode)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+        run: |
+          python3 << 'PYEOF'
+          import os, re, json, time, textwrap, struct, wave, base64
+          import urllib.request
+          import urllib.error
+
+          API_KEYS = [k for k in [
+                          os.environ.get("GEMINI_API_KEY"),
+                          os.environ.get("GEMINI_API_KEY_2"),
+                          os.environ.get("GEMINI_API_KEY_3"),
+                      ] if k]
+          if not API_KEYS:
+              print("❌ Tidak ada API key yang tersedia."); exit(1)
+
+          TTS_MODELS = [
+              "gemini-3.1-flash-tts-preview",
+              "gemini-2.5-flash-preview-tts",
+          ]
+
+          VOICE          = os.environ["VOICE_NAME"]
+          LANGUAGE_LABEL = os.environ.get("LANGUAGE", "Indonesian")
+          GAP            = float(os.environ.get("PARA_GAP", "1"))
+
+          SAMPLE_RATE    = 24000
+          CHANNELS       = 1
+          SAMPLE_WIDTH   = 2
+          TARGET_WORDS   = 550
+          DELAY_SECONDS  = 30
+
+          print("\n" + "="*70)
+          print(" GEMINI TTS - REST API & SEQUENTIAL SAFE MODE ")
+          print("="*70)
+          print(f"Keys     : {len(API_KEYS)}")
+          print(f"Models   : {TTS_MODELS}")
+
+          with open("tts-script.txt", "r", encoding="utf8") as f:
+              raw = f.read().strip()
+
+          def clean_text(text):
+              return re.sub(r"['\"`]", "", text).strip()
+
+          single_paragraphs = [p.strip() for p in raw.split("\n\n") if p.strip()]
+          if not single_paragraphs:
+              print("Error: No paragraphs found!"); exit(1)
+
+          paragraphs = []
+          cur, cur_w = [], 0
+          for p in single_paragraphs:
+              wc = len(p.split())
+              if cur_w + wc > TARGET_WORDS and cur:
+                  paragraphs.append("\n\n".join(cur))
+                  cur, cur_w = [], 0
+              cur.append(p)
+              cur_w += wc
+          if cur: paragraphs.append("\n\n".join(cur))
+
+          print(f"Voice    : {VOICE}")
+          print(f"Batches  : {len(paragraphs)} (Max {TARGET_WORDS} words/batch)")
+          print(f"Strategy : Sequential 1-by-1 with {DELAY_SECONDS}s delay\n")
+
+          def build_voice_prompt(text):
+              cleaned = clean_text(textwrap.dedent(text))
+              return f"""Read the following transcript based on the audio profile and director's note. Maintain a 100% stable, robust, and well-mastered output volume from the very first word to the absolute last word. Prevent any automatic volume fade-outs at the end of sentences by sustaining vocal presence during pauses.
+
+          # Audio Profile
+          An elite, cold, and deeply analytical narrator for a premium YouTube Dark Psychology channel. The voice is deep, commanding, highly intellectual, and speaks directly into the listener's mind with absolute authority.
+          
+          # Director's note
+          - Style: Academic yet chilling, authoritative, crystal-clear articulation with a professional broadcast cadence.
+          - Pace: Calculated and deliberate. Uses strategic, brief pauses after punctuation to let the weight of the words sink in.
+          - Accent: Neutral, flawless English.
+          - Volume: Fixed, full-bodied amplitude. No whispering that drops below baseline decibels, no robotic flatness.
+          
+          ## Transcript:
+          {cleaned}"""
+
+          def silence(sec):
+              n = int(SAMPLE_RATE * sec)
+              return struct.pack(f"<{n}h", *([0]*n))
+
+          def try_tts(payload, key, model):
+              url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+              req = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode('utf-8'),
+                  headers={'Content-Type': 'application/json'},
+                  method='POST'
+              )
+              with urllib.request.urlopen(req, timeout=180) as resp:
+                  res_json = json.loads(resp.read())
+              b64 = res_json['candidates'][0]['content']['parts'][0]['inlineData']['data']
+              return base64.b64decode(b64)
+
+          pcm_data = []
+
+          for i, chunk in enumerate(paragraphs):
+              print("-" * 70)
+              print(f"Mengeksekusi Batch {i+1}/{len(paragraphs)} ({len(chunk.split())} kata)")
+
+              payload = {
+                  "contents": [{"role": "user", "parts": [{"text": build_voice_prompt(chunk)}]}],
+                  "generationConfig": {
+                      "responseModalities": ["AUDIO"],
+                      "temperature": 0.7,
+                      "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}
+                  }
+              }
+
+              success = False
+              for key_idx, key in enumerate(API_KEYS):
+                  for model_idx, model in enumerate(TTS_MODELS):
+                      try:
+                          print(f"  [Key {key_idx+1}/{len(API_KEYS)} | Model {model_idx+1}/{len(TTS_MODELS)}: {model}] Mengirim request...")
+                          audio_bytes = try_tts(payload, key, model)
+                          pcm_data.append(audio_bytes)
+                          print(f"  ✓ Berhasil dengan Key {key_idx+1} + {model} — {len(audio_bytes)} bytes audio.")
+                          success = True
+                          break
+                      except urllib.error.HTTPError as e:
+                          err_msg = e.read().decode('utf-8')
+                          print(f"  ⚠️ HTTP {e.code} (Key {key_idx+1} | {model}): {err_msg[:120]}")
+                          if e.code == 503:
+                              print(f"  → Model {model} overload, coba model berikutnya...")
+                          elif e.code == 429 or e.code == 403:
+                              print(f"  → Key {key_idx+1} kuota habis untuk {model}, coba model berikutnya...")
+                          else:
+                              time.sleep(10)
+                      except Exception as e:
+                          print(f"  ⚠️ Error (Key {key_idx+1} | {model}): {str(e)[:120]}")
+                          time.sleep(10)
+                  if success:
+                      break
+                  if key_idx < len(API_KEYS) - 1:
+                      print(f"  ↩ Semua model Key {key_idx+1} gagal, pindah ke Key {key_idx+2}...")
+
+              if not success:
+                  print(f"\n❌ FATAL: Batch {i+1} gagal di semua key dan model. Pipeline dihentikan.")
+                  exit(1)
+
+              # JEDA SEKUENSIAL YANG AMAN
+              if i < len(paragraphs) - 1:
+                  pcm_data.append(silence(GAP))
+                  print(f"  ⏳ Menunggu {DELAY_SECONDS} detik secara berurutan agar aman dari limit RPM...")
+                  time.sleep(DELAY_SECONDS)
+
+          # --- Simpan File Audio Langsung ke WAV format 16-bit PCM ---
+          out_file = "output/audio.wav"
+          with wave.open(out_file, "wb") as wf:
+              wf.setnchannels(CHANNELS)
+              wf.setsampwidth(SAMPLE_WIDTH)
+              wf.setframerate(SAMPLE_RATE)
+              wf.writeframes(b"".join(pcm_data))
+
+          duration = sum(len(x) for x in pcm_data) / (SAMPLE_RATE * SAMPLE_WIDTH)
+
+          print("\n" + "="*70)
+          print(" SUCCESS: AUDIO GENERATION COMPLETED ")
+          print("="*70)
+          print(f"Output   : {out_file}")
+          print(f"Duration : {duration:.1f} seconds\n")
+          PYEOF
+
+      - name: Analyze Audio (Chunked Process)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          LANGUAGE: ${{ github.event.inputs.language }}
+        run: |
+          python3 << 'PYEOF'
+          import json
+          import os
+          import time
+          import math
+          import wave
+          import threading
+          import textwrap
+          from google import genai
+          from google.genai import types
+          from google.genai import errors as genai_errors
+
+          LANGUAGE = os.environ.get("LANGUAGE", "Indonesian")
+
+          _api_keys = [k for k in [
+              os.environ.get("GEMINI_API_KEY"),
+              os.environ.get("GEMINI_API_KEY_2"),
+              os.environ.get("GEMINI_API_KEY_3"),
+          ] if k]
+          if not _api_keys:
+              print("❌ Tidak ada API key yang tersedia."); exit(1)
+          _key_idx = [0]
+
+          # Sesuai dokumentasi resmi: satu client instance per key
+          # genai.Client(api_key=KEY) — dibuat sekali, dipakai sampai kena limit
+          # rotate_key() membuat client baru dengan key berikutnya
+          client = genai.Client(api_key=_api_keys[0])
+          _active_client = [client]
+
+          def get_client():
+              return _active_client[0]
+
+          def rotate_key(reason=""):
+              next_idx = (_key_idx[0] + 1) % len(_api_keys)
+              if next_idx != _key_idx[0]:
+                  print(f"  ↩ Key {_key_idx[0]+1} {reason}, pindah ke Key {next_idx+1}...")
+                  _key_idx[0] = next_idx
+                  _active_client[0] = genai.Client(api_key=_api_keys[next_idx])
+                  return True
+              print(f"  ⚠️ Semua key sudah dicoba ({reason})")
+              return False
+
+          MODEL_LIST = [
+              "gemini-3.1-flash-lite",
+              "gemini-3-flash-preview",
+              "gemini-3.5-flash",
+          ]
+          MAX_ROUNDS = 5
+
+          REQUEST_TIMEOUT = 180  # maks 3 menit per request API, setelah itu dianggap hang
+
+          def analyze_chunk(audio_file, prompt, sys_instruction, label, expected_duration=None, min_segments_needed=None):
+              last_error = None
+              for round_num in range(1, MAX_ROUNDS + 1):
+                  for model_name in MODEL_LIST:
+                      print(f"[{label}] Round {round_num}/{MAX_ROUNDS} -> mencoba model: {model_name}")
+                      try:
+                          result_holder = [None]
+                          error_holder = [None]
+
+                          def do_request():
+                              try:
+                                  result_holder[0] = get_client().models.generate_content(
+                                      model=model_name,
+                                      contents=[audio_file, prompt],
+                                      config=types.GenerateContentConfig(
+                                          system_instruction=sys_instruction,
+                                          response_mime_type="application/json"
+                                      )
+                                  )
+                              except Exception as e:
+                                  error_holder[0] = e
+
+                          req_thread = threading.Thread(target=do_request, daemon=True)
+                          req_thread.start()
+                          req_thread.join(timeout=REQUEST_TIMEOUT)
+
+                          if req_thread.is_alive():
+                              raise TimeoutError(f"Request ke {model_name} timeout setelah {REQUEST_TIMEOUT}s")
+                          if error_holder[0] is not None:
+                              raise error_holder[0]
+
+                          response = result_holder[0]
+                          data = json.loads(response.text)
+                          segments = data.get("segments", [])
+                          total_seg_dur = sum(float(s.get("duration", 0) or 0) for s in segments)
+
+                          if expected_duration and min_segments_needed:
+                              if len(segments) < min_segments_needed or total_seg_dur < expected_duration * 0.6:
+                                  raise ValueError(
+                                      f"Hasil under-segmented: {len(segments)} segmen (butuh >= {min_segments_needed}), "
+                                      f"total durasi segmen {total_seg_dur:.1f}s vs ekspektasi ~{expected_duration:.1f}s"
+                                  )
+
+                          print(f"  ✓ [{label}] Berhasil dengan model {model_name} ({len(segments)} segments, total {total_seg_dur:.1f}s)")
+                          return data
+                      except TimeoutError as e:
+                          last_error = e
+                          print(f"  ⚠️ {model_name} TIMEOUT ({REQUEST_TIMEOUT}s), skip ke model berikutnya...")
+                      except genai_errors.APIError as e:
+                          last_error = e
+                          if e.code in (503, 500):
+                              print(f"  ⚠️ {model_name} overload (HTTP {e.code}), tunggu 15s lalu lanjut ke model berikutnya...")
+                              time.sleep(15)
+                          elif e.code in (429, 403):
+                              rotated = rotate_key("kuota habis")
+                              print(f"  ⚠️ {model_name} kena limit kuota (HTTP {e.code}), {'pindah key' if rotated else 'semua key habis — tunggu 60s'}")
+                              if not rotated:
+                                  time.sleep(60)
+                          else:
+                              print(f"  ⚠️ {model_name} APIError {e.code}: {str(e)[:200]}")
+                          time.sleep(3)
+                      except ValueError as e:
+                          last_error = e
+                          msg = str(e)
+                          if "under-segmented" in msg:
+                              print(f"  ⚠️ {model_name}: {msg}, lanjut ke model berikutnya...")
+                          else:
+                              print(f"  ⚠️ {model_name} ValueError: {msg[:200]}")
+                      except Exception as e:
+                          last_error = e
+                          msg = str(e)
+                          if "SSL" in msg or "disconnected" in msg or "Bad record" in msg.lower():
+                              print(f"  ⚠️ {model_name} SSL/network error, tunggu 5s lalu retry...")
+                              time.sleep(5)
+                          else:
+                              print(f"  ⚠️ {model_name} error: {msg[:200]}")
+
+                  if round_num < MAX_ROUNDS:
+                      wait = 30 * round_num
+                      print(f"[{label}] Semua {len(MODEL_LIST)} model gagal di round {round_num}. Menunggu {wait}s lalu mengulang dari model pertama...")
+                      time.sleep(wait)
+
+              print(f"[{label}] ⚠️ GAGAL TOTAL setelah {MAX_ROUNDS} putaran x {len(MODEL_LIST)} model. Error terakhir: {last_error}")
+              return {"summary": f"Analisis {label} gagal total setelah semua model & retry dicoba.", "segments": []}
+
+          def generate_metadata_with_fallback(prompt, sys_instruction):
+              last_error = None
+              for round_num in range(1, MAX_ROUNDS + 1):
+                  for model_name in MODEL_LIST:
+                      print(f"[YouTube Metadata] Round {round_num}/{MAX_ROUNDS} -> mencoba model: {model_name}")
+                      try:
+                          response = get_client().models.generate_content(
+                              model=model_name,
+                              contents=prompt,
+                              config=types.GenerateContentConfig(
+                                  system_instruction=sys_instruction,
+                                  response_mime_type="application/json"
+                              )
+                          )
+                          data = json.loads(response.text)
+                          title = (data.get("youtube_title") or "").strip()
+                          desc = (data.get("youtube_description") or "").strip()
+                          tags = data.get("youtube_tags") or []
+                          thumb = (data.get("thumbnail_prompt") or "").strip()
+
+                          if len(title) < 10:
+                              raise ValueError("youtube_title terlalu pendek/kosong")
+                          if len(desc) < 80:
+                              raise ValueError("youtube_description terlalu pendek/kosong")
+                          if len(tags) < 5:
+                              raise ValueError("youtube_tags terlalu sedikit (<5)")
+                          if len(thumb) < 300:
+                              raise ValueError("thumbnail_prompt terlalu pendek/kosong")
+
+                          print(f"  ✓ [YouTube Metadata] Berhasil dengan model {model_name}")
+                          return data
+                      except genai_errors.APIError as e:
+                          last_error = e
+                          if e.code in (503, 500):
+                              print(f"  ⚠️ {model_name} overload (HTTP {e.code}), lanjut ke model berikutnya...")
+                          elif e.code in (429, 403):
+                              rotated = rotate_key("kuota habis")
+                              print(f"  ⚠️ {model_name} kena limit kuota (HTTP {e.code}), {'pindah key' if rotated else 'semua key habis'}")
+                          else:
+                              print(f"  ⚠️ {model_name} APIError {e.code}: {str(e)[:200]}")
+                      except Exception as e:
+                          last_error = e
+                          print(f"  ⚠️ {model_name} error/hasil tidak valid: {str(e)[:200]}")
+
+                  if round_num < MAX_ROUNDS:
+                      wait = 30 * round_num
+                      print(f"[YouTube Metadata] Semua model gagal di round {round_num}. Menunggu {wait}s lalu mengulang...")
+                      time.sleep(wait)
+
+              print(f"[YouTube Metadata] ⚠️ GAGAL TOTAL setelah {MAX_ROUNDS} putaran. Error terakhir: {last_error}")
+              return None
+
+          print("\n" + "="*70)
+          print(" AUDIO ANALYSIS (CHUNKED OMIT LIMIT MODE) ")
+          print("="*70 + "\n")
+
+          print("Uploading full audio...")
+          audio = None
+          for _upload_attempt in range(len(_api_keys) * 2):
+              try:
+                  audio = get_client().files.upload(file="output/audio.wav")
+                  print(f"✓ Upload completed: {audio.uri}\n")
+                  break
+              except Exception as _e:
+                  _msg = str(_e)
+                  print(f"⚠️ Upload gagal (Key {_key_idx[0]+1}): {_msg[:120]}")
+                  if "429" in _msg or "RESOURCE_EXHAUSTED" in _msg or "quota" in _msg.lower():
+                      rotate_key("kuota habis saat upload")
+                  time.sleep(10)
+          if audio is None:
+              print("❌ Upload audio gagal di semua key. Pipeline dihentikan.")
+              exit(1)
+
+          system_instruction = f"""
+          You are a storyboard artist for a psychology YouTube channel using 2D stickman illustration style — simple black line art on pure white background, like educational explainer videos.
+          Translate the narration audio into a finely-grained visual timeline of many short segments, each with a stickman scene directly illustrating what is spoken.
+
+          SEGMENTATION PRIORITY (NON-NEGOTIABLE):
+          - Many short segments (3-8 seconds each). Hundreds across the full narration is normal and encouraged.
+          - Every distinct sentence or emotional beat deserves its own segment.
+          - Sum of all "duration" values must equal the EXACT total duration of the audio section.
+          - Never exceed 8 seconds per segment.
+
+          STICKMAN IMAGE PROMPT MANDATE:
+          - STYLE: 2D stickman — simple circular head, stick body and limbs. Black outlines only on pure white. No color, no shading, no gradients.
+          - EXPRESSIVENESS: Convey emotion through body posture, head tilt, arm position, dot-eyes, curved/straight/downward mouth, sweat drops for anxiety.
+          - SCENE: Each prompt must include: (1) 1-2 stickman characters physically acting out the concept, (2) a simple prop or environment in stick-art style (chair, phone, door, cloud, sun, box, arrow), (3) a thought bubble, speech bubble, or text label in {LANGUAGE} summarizing the key idea in max 5 words.
+          - LITERAL: Directly draw what is being said. No abstract metaphors. If narrator says "you avoid difficult conversations", draw stickman turning away from another with speech bubble between them.
+          - VARIETY: Each segment must look different — vary number of characters, positions, props, bubble types.
+          - image_prompt: 300-600 characters, clear and direct. No art theory terms.
+
+          FFmpeg VIDEO EDITING MANDATE:
+          - camera_movement: zoom_in_slow / zoom_out_slow / pan_left / pan_right / pan_up / pan_down / static
+          - transition_effect: fade / crossfade / wipe_left / wipe_right / slide_up / zoom_blur / none
+
+          Strictly output ONLY valid JSON matching the exact schema provided. No markdown wrappers.
+          """
+
+          base_prompt_template          base_prompt_template = """
+          Analyze the specified part of this narration audio.
+          Break the timeline into MANY short, sequential segments with precise timestamps.
+          CRITICAL FOCUS: You must ONLY analyze the part of the audio that matches this text section:
+          \"\"\"{text_chunk}\"\"\"
+
+          CRITICAL SEGMENT REQUIREMENT (DO NOT IGNORE):
+          - This audio section spans approximately {expected_duration:.0f} seconds.
+          - Aim for around {target_segments} segments (roughly 3-8 seconds each).
+          Producing MORE than this target is GOOD and welcomed — never fewer.
+          - The absolute minimum allowed is {min_segments} segments.
+          Fewer than this will cause your entire response to be rejected and retried with a different model.
+          - Every segment's "duration" must be between 3 and 8 seconds, no exceptions.
+          - The sum of all "duration" values must add up to approximately {expected_duration:.0f} seconds, covering the section from start to end with NO gaps and NO overlap.
+          Your output must strictly follow this JSON structure:
+          {{
+            "summary": "Deep overarching theme analysis for this section.",
+            "segments": [
+              {{
+                "start": "MM:SS",
+                "end": "MM:SS",
+                "duration": 5,
+                "text": "Spoken text matching the audio timestamp.",
+                "subtitle": "Clean subtitle.",
+                "image_prompt": "2D stickman scene, white background, black line art. [Describe 1-2 stickman characters and what they physically do to illustrate the spoken text]. [One simple stick-art prop or environment]. [Thought bubble or text label in {LANGUAGE} with max 5 words summarizing the key idea]. No color, no shading.",
+                "camera_movement": "Choose one: zoom_in_slow / zoom_out_slow / pan_left / pan_right / pan_up / pan_down / static",
+                "transition_effect": "Choose one: fade / crossfade / wipe_left / wipe_right / slide_up / zoom_blur / none",
+                "transition_duration": 0.5,
+              }}
+            ]
+          }}
+          Note: image_prompt must be 300-600 characters. Clear stickman scene description. No color, shading, or art theory terms. Directly visualize what is spoken.
+          """
+
+          TARGET_SEG_SECONDS = 9.0      # target rata-rata panjang tiap segmen (tengah rentang 3-8s)
+          MAX_SEGMENTS_PER_CALL = 15    # batas segmen per panggilan API agar output JSON tidak ter-truncate
+
+          with open("tts-script.txt", "r", encoding="utf8") as f:
+              raw_script = f.read().strip()
+
+          single_paragraphs = [p.strip() for p in raw_script.split("\n\n") if p.strip()]
+          total_words = len(raw_script.split()) or 1
+
+          with wave.open("output/audio.wav", "rb") as wf:
+              total_audio_duration = wf.getnframes() / float(wf.getframerate())
+
+          expected_total_segments = max(1, math.ceil(total_audio_duration / TARGET_SEG_SECONDS))
+          num_chunks = max(1, math.ceil(expected_total_segments / MAX_SEGMENTS_PER_CALL))
+
+          print(f"Total durasi audio asli  : {total_audio_duration:.1f}s")
+          print(f"Estimasi total segmen    : ~{expected_total_segments} (target {TARGET_SEG_SECONDS:.0f}s/segmen, boleh lebih banyak)")
+          print(f"Jumlah chunk analisis    : {num_chunks} (maks {MAX_SEGMENTS_PER_CALL} segmen/chunk supaya JSON tidak ter-truncate)\n")
+
+          words_per_chunk_target = total_words / num_chunks
+          chunks_text = []
+          current = []
+          current_words = 0
+          for p in single_paragraphs:
+              wc = len(p.split())
+              if current_words >= words_per_chunk_target and current and len(chunks_text) < num_chunks - 1:
+                  chunks_text.append("\n\n".join(current))
+                  current = []
+                  current_words = 0
+              current.append(p)
+              current_words += wc
+          if current:
+              chunks_text.append("\n\n".join(current))
+
+          combined_segments = []
+          summary_parts = []
+
+          PARALLEL_WORKERS = 3
+          RPM_DELAY = 22
+          THREAD_TIMEOUT = 600  # maks 10 menit per chunk sebelum dianggap stuck
+
+          print(f"\nMemulai analisis audio paralel ({PARALLEL_WORKERS} workers, delay {RPM_DELAY}s antar launch)...")
+
+          results = [None] * len(chunks_text)
+          rpm_semaphore = threading.Semaphore(PARALLEL_WORKERS)
+
+          def analyze_worker(idx, chunk_text):
+              label = f"Part {idx+1}/{len(chunks_text)}"
+              chunk_words = len(chunk_text.split())
+              chunk_expected_dur = total_audio_duration * (chunk_words / total_words)
+              chunk_target_segments = max(3, round(chunk_expected_dur / TARGET_SEG_SECONDS))
+              chunk_min_segments = max(3, math.ceil(chunk_expected_dur / 8))
+
+              prompt = base_prompt_template.format(
+                  text_chunk=chunk_text,
+                  expected_duration=chunk_expected_dur,
+                  target_segments=chunk_target_segments,
+                  min_segments=chunk_min_segments
+              )
+
+              acquired = rpm_semaphore.acquire(timeout=THREAD_TIMEOUT)
+              if not acquired:
+                  print(f"\n[{label}] ⚠️ Timeout tunggu semaphore ({THREAD_TIMEOUT}s), skip chunk ini.")
+                  return
+              try:
+                  print(f"\n[{label}] Memulai analisis (~{chunk_expected_dur:.1f}s, target ~{chunk_target_segments} segmen, min {chunk_min_segments})...")
+                  data = analyze_chunk(audio, prompt, system_instruction, label, chunk_expected_dur, chunk_min_segments)
+                  results[idx] = data
+              finally:
+                  rpm_semaphore.release()
+
+          threads = []
+          for idx, chunk_text in enumerate(chunks_text):
+              t = threading.Thread(target=analyze_worker, args=(idx, chunk_text), daemon=True)
+              threads.append(t)
+              t.start()
+              if idx < len(chunks_text) - 1:
+                  time.sleep(RPM_DELAY)
+
+          for t in threads:
+              t.join(timeout=THREAD_TIMEOUT)
+              if t.is_alive():
+                  print(f"⚠️ Thread {t.name} masih berjalan setelah {THREAD_TIMEOUT}s — dianggap stuck, lanjut.")
+
+          for data in results:
+              if data:
+                  combined_segments.extend(data.get("segments", []))
+                  summary_parts.append(data.get("summary", ""))
+
+          combined_summary = " | ".join(summary_parts)
+
+          metadata_system_instruction = f"""
+          You are an elite YouTube growth strategist, SEO copywriter, and stickman thumbnail art director for a psychology channel.
+          Produce YouTube metadata AND a thumbnail that is clickbait-honest — genuinely curiosity-inducing but never misleading.
+
+          OUTPUT LANGUAGE: All fields and thumbnail text in fluent native-level {LANGUAGE}.
+
+          TITLE: 50-70 chars. Provocative claim or question the video genuinely answers. Strong SEO.
+          DESCRIPTION: 150-300 words. First 2 sentences = hook. 3-5 keywords naturally woven. End with CTA.
+          TAGS: 12-20 tags, most-relevant first, mix {LANGUAGE} and English.
+
+          THUMBNAIL_PROMPT RULES:
+          - Same 2D stickman style as the video. Unique to THIS topic — never a generic template.
+          - Pure white background. Black line art only. No color fills.
+          - LEFT 40%: Bold ALL-CAPS text in {LANGUAGE}. 2-3 short punchy hook lines. Emotionally charged, directly relevant to this video's core reveal.
+          - RIGHT 60%: Stickman scene that LITERALLY and UNIQUELY illustrates this video's core concept. Invent a specific situation that could only belong to THIS topic. If video is about dopamine: stickman chained to phone with loop arrow. If about social anxiety: stickman shrinking while crowd grows taller. If about manipulation: puppet strings from one stickman controlling another.
+          - 1-2 simple stick-art props relevant to topic.
+          - One short label or thought bubble in {LANGUAGE} near stickman reinforcing the hook.
+          - Composition must feel fresh and specific — viewer immediately knows this video's topic.
+          - thumbnail_prompt: 400-700 characters. Direct and implementable. No art theory terms.
+
+          Strictly output ONLY valid JSON. No markdown wrappers.
+          """
+
+          metadata_prompt          metadata_prompt = """
+          Here is the full narration script for this video:
+          \"\"\"{raw_script}\"\"\"
+
+          Here is the combined psychological analysis summary across all sections:
+          \"\"\"{combined_summary}\"\"\"
+
+          Based on the FULL content above, generate YouTube upload metadata and a special thumbnail concept following the Art Director brief in your system instructions exactly.
+
+          Output must strictly follow this JSON structure:
+          {{
+            "youtube_title": "...",
+            "youtube_description": "...",
+            "youtube_tags": ["tag1", "tag2", "..."],
+            "thumbnail_prompt": "..."
+          }}
+          """.format(raw_script=raw_script, combined_summary=combined_summary)
+
+          print("\n" + "="*70)
+          print(" GENERATING YOUTUBE METADATA & THUMBNAIL PROMPT ")
+          print("="*70)
+
+          metadata = generate_metadata_with_fallback(metadata_prompt, metadata_system_instruction)
+
+          if not metadata:
+              print("⚠️ Memakai metadata fallback generik karena semua model gagal.")
+              metadata = {
+                  "youtube_title": (raw_script.split(".")[0].strip()[:65] if raw_script else "A Deep Psychological Narrative"),
+                  "youtube_description": "An immersive psychological narrative exploring the depths of the human mind, the subconscious, and the hidden architecture of our thoughts.",
+                  "youtube_tags": ["psychology", "human behavior", "mind", "subconscious", "deep narrative", "philosophy"],
+                  "thumbnail_prompt": "2D stickman scene, white background, black line art. Single stickman standing at a crossroads with two arrows pointing different directions, question mark thought bubble above head. LEFT side bold ALL-CAPS text in {LANGUAGE}: two short hook lines about the video topic. Simple stick-art props: small signpost, dotted path lines. No color, no shading."
+              }
+
+          def clamp_text(text, max_len):
+              """Pengaman: kalau teks kepanjangan, potong di akhir kalimat terdekat
+              di bawah batas -- supaya tidak berisiko ditolak situs generator gambar
+              karena melewati limit panjang yang tidak kita ketahui pasti."""
+              text = (text or "").strip()
+              if len(text) <= max_len:
+                  return text
+              cut = text[:max_len]
+              last_period = cut.rfind(". ")
+              return cut[:last_period + 1] if last_period > max_len * 0.6 else cut
+
+          metadata["thumbnail_prompt"] = clamp_text(metadata.get("thumbnail_prompt", ""), 2600)
+
+          print(f"Judul       : {metadata.get('youtube_title','')}")
+          print(f"Tags        : {len(metadata.get('youtube_tags', []))} tags")
+          print(f"Thumbnail   : {len(metadata.get('thumbnail_prompt',''))} karakter\n")
+
+          final_analysis = {
+              "summary": combined_summary,
+              "segments": combined_segments,
+              "youtube_title": metadata.get("youtube_title", ""),
+              "youtube_description": metadata.get("youtube_description", ""),
+              "youtube_tags": metadata.get("youtube_tags", []),
+              "thumbnail_prompt": metadata.get("thumbnail_prompt", "")
+          }
+
+          os.makedirs("release", exist_ok=True)
+          with open("release/analysis.json", "w", encoding="utf8") as f:
+              json.dump(final_analysis, f, indent=2, ensure_ascii=False)
+
+          print("\n" + "="*70)
+          print(f"SUCCESS: Combined analysis.json saved with {len(combined_segments)} total segments!")
+          print("="*70)
+          PYEOF
+
+      - name: Generate Images (Parallel)
+        run: |
+          cat > generate-images.js <<'EOF'
+          const { chromium } = require("playwright");
+          const fs = require("fs");
+          const sharp = require("sharp");
+          const os = require("os");
+          const path = require("path");
+
+          const analysis = JSON.parse(
+              fs.readFileSync("release/analysis.json", "utf8")
+          );
+          const segments = analysis.segments;
+
+          const BROWSER_LIMIT           = 100;
+          const NUM_BROWSERS            = 3;
+          const MAX_WORKERS_PER_BROWSER = 7;
+          const DELAY_AFTER_BATCH_MS    = 5 * 60 * 1000;
+
+          // Fingerprint berbeda tiap sesi agar freegen.app menganggap user berbeda
+          const USER_AGENTS = [
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          ];
+          const LOCALES    = ['en-US', 'en-GB', 'id-ID'];
+          const TIMEZONES  = ['America/New_York', 'Europe/London', 'Asia/Jakarta'];
+          const VIEWPORTS  = [
+              { width: 1280, height: 800 },
+              { width: 1366, height: 768 },
+              { width: 1440, height: 900 },
+          ];
+          
+          fs.mkdirSync("release/images", { recursive: true });
+
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+          const crypto    = require('crypto');
+          const WebSocket = require('ws');
+
+          const FREEGEN_RATIO = '16:9';
+
+          async function generateFreegenAPI(prompt, outPath) {
+              for (let retry = 1; retry <= 2; retry++) {
+                  try {
+                      const signerRes = await fetch('https://prompt-signer.freegen.app', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ prompt })
+                      });
+                      if (!signerRes.ok) throw new Error(`Signer HTTP ${signerRes.status}`);
+                      const { ts, sig } = await signerRes.json();
+
+                      const genRes = await fetch('https://image-generator.freegen.app', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ prompt, ts, sig, ratio_id: FREEGEN_RATIO })
+                      });
+                      if (!genRes.ok) throw new Error(`Generator HTTP ${genRes.status}`);
+                      const genData = await genRes.json();
+
+                      if (genData.image_data_url) {
+                          const imgRes = await fetch(genData.image_data_url);
+                          const buffer = Buffer.from(await imgRes.arrayBuffer());
+                          await sharp(buffer).jpeg({ quality: 92 }).toFile(outPath);
+                          console.log(`✓ ${outPath} (freegen API direct)`);
+                          return true;
+                      }
+
+                      if (genData.job_id) {
+                          const jobId   = genData.job_id;
+                          const hashHex = crypto.createHash('sha256').update(jobId + ts).digest('hex');
+                          const auth    = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + ts;
+                          const ok = await new Promise((resolve) => {
+                              const ws    = new WebSocket('wss://websocket-bridge.freegen.app/ws');
+                              const timer = setTimeout(() => { ws.terminate(); resolve(false); }, 300000);
+
+                              ws.on('open', () => {
+                                  ws.send(JSON.stringify({ type: 'subscribe', job_id: jobId, auth }));
+                              });
+                              ws.on('message', async (data) => {
+                                  const msg = JSON.parse(data.toString());
+                                  if (msg.type === 'result') {
+                                      clearTimeout(timer);
+                                      let b64 = msg.image_data;
+                                      if (b64.includes(',')) b64 = b64.split(',')[1];
+                                      try {
+                                          await sharp(Buffer.from(b64, 'base64')).jpeg({ quality: 92 }).toFile(outPath);
+                                          ws.terminate();
+                                          resolve(true);
+                                      } catch (e) {
+                                          ws.terminate();
+                                          resolve(false);
+                                      }
+                                  } else if (msg.type === 'error') {
+                                      clearTimeout(timer);
+                                      ws.terminate();
+                                      resolve(false);
+                                  }
+                              });
+                              ws.on('error', (err) => {
+                                  clearTimeout(timer);
+                                  console.log(`[FreegenAPI WS] ${err.message}`);
+                                  resolve(false);
+                              });
+                          });
+
+                          if (ok) {
+                              console.log(`✓ ${outPath} (freegen API WebSocket)`);
+                              return true;
+                          }
+                          throw new Error('WebSocket result not received');
+                      }
+
+                      throw new Error('No job_id or image_data_url in response');
+                  } catch (err) {
+                      console.log(`[FreegenAPI] Retry ${retry}/2: ${err.message}`);
+                  }
+              }
+              return false;
+          }
+
+          async function generate(page, prompt, outPath) {
+              try {
+                  await page.goto("https://freegen.app/", { waitUntil: "domcontentloaded" });
+                  await page.waitForLoadState("networkidle").catch(() => {});
+
+                  await page.selectOption("#aspectRatioSelect", "16:9");
+                  await page.fill("#prompt", prompt);
+                  await page.keyboard.press("Enter");
+
+                  const imageContainer = page.locator("#imageContainer");
+                  await imageContainer.waitFor({ timeout: 90000 });
+
+                  const img    = imageContainer.locator("img");
+                  const src    = await img.getAttribute("src");
+                  const base64 = src.replace(/^data:image\/[a-z]+;base64,/, "");
+                  fs.writeFileSync(outPath, base64, "base64");
+
+                  console.log("✓", outPath);
+                  return true;
+              } catch (err) {
+                  console.log(`[Playwright] Gagal: ${err.message} — masuk failedQueue`);
+                  try {
+                      await page.screenshot({ path: outPath.replace(/\.jpg$/, ".debug.png"), fullPage: true });
+                      const bodyText = await page.locator("body").innerText().catch(() => "(gagal)");
+                      fs.writeFileSync(outPath.replace(/\.jpg$/, ".debug.txt"), bodyText.slice(0, 3000));
+                  } catch (_) {}
+                  return false;
+              }
+          }
+
+          async function launchIncognitoSession(sessionIdx) {
+              // userDataDir = folder temp baru tiap sesi → benar-benar kosong, tidak berbagi cache/cookie
+              const userDataDir = path.join(os.tmpdir(), `freegen-session-${sessionIdx}-${Date.now()}`);
+
+              const browser = await chromium.launchPersistentContext(userDataDir, {
+                  headless: true,
+                  args: [
+                      '--no-sandbox',
+                      '--disable-setuid-sandbox',
+                      '--incognito',                          // mode incognito
+                      '--disable-blink-features=AutomationControlled',
+                      '--disable-dev-shm-usage',
+                  ],
+                  // Fingerprint unik per sesi
+                  userAgent:  USER_AGENTS[sessionIdx % USER_AGENTS.length],
+                  locale:     LOCALES[sessionIdx % LOCALES.length],
+                  timezoneId: TIMEZONES[sessionIdx % TIMEZONES.length],
+                  viewport:   VIEWPORTS[sessionIdx % VIEWPORTS.length],
+                  // Paksa storage bersih — tidak ada cookie/localStorage lama
+                  storageState: undefined,
+              });
+
+              console.log(`  [Sesi ${sessionIdx + 1}] UserAgent : ${USER_AGENTS[sessionIdx % USER_AGENTS.length]}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] Locale    : ${LOCALES[sessionIdx % LOCALES.length]}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] Timezone  : ${TIMEZONES[sessionIdx % TIMEZONES.length]}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] Viewport  : ${JSON.stringify(VIEWPORTS[sessionIdx % VIEWPORTS.length])}`);
+              console.log(`  [Sesi ${sessionIdx + 1}] DataDir   : ${userDataDir}`);
+
+              return browser; // launchPersistentContext langsung return BrowserContext
+          }
+
+          const failedQueue = [];
+
+          async function worker(id, sessionIdx, context, queue) {
+              const page = await context.newPage();
+              while (true) {
+                  const index = queue.shift();
+                  if (index === undefined) break;
+                  console.log(`\n[Sesi${sessionIdx + 1}|Tab${id}] Segmen ${index + 1}/${segments.length} (${segments[index].start} -> ${segments[index].end})`);
+                  const outPath = `release/images/${String(index + 1).padStart(3, "0")}.jpg`;
+                  const ok = await generate(page, segments[index].image_prompt, outPath);
+                  if (!ok) failedQueue.push({ index, prompt: segments[index].image_prompt, outPath });
+              }
+              await page.close();
+          }
+
+          async function freegenAPIWorker() {
+              let processed = 0;
+              while (failedQueue.length > 0) {
+                  const job = failedQueue.shift();
+                  console.log(`\n[FallbackAPI] Retry segmen ${job.index + 1}/${segments.length}`);
+                  const ok = await generateFreegenAPI(job.prompt, job.outPath);
+                  if (!ok) {
+                      fs.writeFileSync(
+                          job.outPath.replace(/\.jpg$/, ".error.txt"),
+                          `Segmen ${job.index + 1} gagal total di Playwright dan freegen API.`
+                      );
+                      console.log(`⚠️ Segmen ${job.index + 1} gagal total.`);
+                  }
+                  processed++;
+                  if (processed % 99 === 0 && failedQueue.length > 0) {
+                      console.log(`\n⏳ [FallbackAPI] ${processed} gambar selesai — delay ${DELAY_AFTER_BATCH_MS / 60000} menit sebelum lanjut...`);
+                      await sleep(DELAY_AFTER_BATCH_MS);
+                  }
+              }
+              if (processed > 0) console.log(`\n[FallbackAPI] Selesai memproses ${processed} gambar.`);
+          }
+
+          (async () => {
+              const startTime = Date.now();
+              console.log("\n" + "=".repeat(60));
+              console.log(" IMAGE GENERATOR — MULTI-SESI INCOGNITO ");
+              console.log("=".repeat(60));
+              console.log(`Total segmen : ${segments.length}`);
+              console.log(`Sesi browser : ${NUM_BROWSERS} (maks ${BROWSER_LIMIT} img/sesi)`);
+              console.log(`Tab/sesi     : ${MAX_WORKERS_PER_BROWSER}`);
+              console.log(`Fingerprint  : user-agent + locale + timezone + viewport berbeda tiap sesi`);
+              console.log(`Storage      : folder temp BARU tiap sesi (cookie & session = nol)\n`);
+
+              // Bagi segmen ke bucket per sesi
+              const buckets = [];
+              for (let b = 0; b < NUM_BROWSERS; b++) {
+                  const start = b * BROWSER_LIMIT;
+                  const end   = Math.min(start + BROWSER_LIMIT, segments.length);
+                  if (start >= segments.length) break;
+                  buckets.push(Array.from({ length: end - start }, (_, i) => start + i));
+              }
+              const handled = NUM_BROWSERS * BROWSER_LIMIT;
+              if (segments.length > handled) {
+                  console.log(`⚠️ ${segments.length - handled} segmen melebihi kapasitas ${NUM_BROWSERS} sesi (${handled} max). Sisanya masuk freegen API fallback.\n`);
+                  // Tambahkan sisa ke failedQueue langsung
+                  for (let i = handled; i < segments.length; i++) {
+                      failedQueue.push({
+                          index: i,
+                          prompt: segments[i].image_prompt,
+                          outPath: `release/images/${String(i + 1).padStart(3, "0")}.jpg`
+                      });
+                  }
+              }
+
+              // Thumbnail via freegen API (tidak memakai slot browser)
+              if (analysis.thumbnail_prompt) {
+                  console.log("--- Generating THUMBNAIL (via freegen API) ---");
+                  let ok = await generateFreegenAPI(analysis.thumbnail_prompt, "release/thumbnail.jpg");
+                  if (!ok) {
+                      console.log("⚠️ freegen API gagal, coba via Playwright sesi sementara...");
+                      const tmpCtx = await launchIncognitoSession(99);
+                      const tmpPage = await tmpCtx.newPage();
+                      ok = await generate(tmpPage, analysis.thumbnail_prompt, "release/thumbnail.jpg");
+                      await tmpCtx.close();
+                  }
+                  console.log(ok ? "✓ Thumbnail berhasil\n" : "⚠️ Thumbnail gagal, akan pakai fallback dari segmen pertama\n");
+              } else {
+                  console.log("⚠️ Tidak ada thumbnail_prompt, skip.\n");
+              }
+
+              // Jalankan setiap sesi secara berurutan
+              // Sesi baru = browser baru dengan cookie kosong + fingerprint berbeda
+              for (let b = 0; b < buckets.length; b++) {
+                  const bucket = buckets[b];
+                  console.log(`\n${"=".repeat(60)}`);
+                  console.log(` SESI ${b + 1}/${buckets.length} — Segmen ${bucket[0] + 1} s/d ${bucket[bucket.length - 1] + 1}`);
+                  console.log("=".repeat(60));
+
+                  const context = await launchIncognitoSession(b);
+                  const queue   = [...bucket];
+
+                  await Promise.all(
+                      Array.from({ length: Math.min(MAX_WORKERS_PER_BROWSER, queue.length) }, (_, i) =>
+                          worker(i + 1, b, context, queue)
+                      )
+                  );
+
+                  await context.close();
+                  console.log(`✓ Sesi ${b + 1} selesai & ditutup.`);
+                  if (b < buckets.length - 1) {
+                      console.log(`\n⏳ Delay ${DELAY_AFTER_BATCH_MS / 60000} menit sebelum sesi berikutnya (bypass rate limit freegen.app)...`);
+                      await sleep(DELAY_AFTER_BATCH_MS);
+                  }
+              }
+
+              console.log(`\nSemua sesi selesai. Gambar gagal (freegen API retry): ${failedQueue.length}`);
+
+              if (failedQueue.length > 0) {
+                  console.log("Menjalankan freegen API fallback...");
+                  await freegenAPIWorker();
+              }
+
+              // Fallback thumbnail dari segmen pertama yang ada
+              if (!fs.existsSync("release/thumbnail.jpg")) {
+                  const firstAvailable = fs.existsSync("release/images")
+                      ? fs.readdirSync("release/images").filter(f => f.endsWith(".jpg")).sort()[0]
+                      : null;
+                  if (firstAvailable) {
+                      fs.copyFileSync(`release/images/${firstAvailable}`, "release/thumbnail.jpg");
+                      console.log(`\n✓ Thumbnail fallback dari segmen ${firstAvailable}.`);
+                  } else {
+                      console.log("\n⚠️ Tidak ada gambar untuk fallback thumbnail.");
+                  }
+              }
+
+              const elapsed   = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
+              const allImages = fs.readdirSync("release/images").filter(f => f.endsWith(".jpg"));
+              const allErrors = fs.readdirSync("release/images").filter(f => f.endsWith(".error.txt"));
+
+              console.log("\n" + "=".repeat(60));
+              console.log(" HASIL GENERATE ");
+              console.log("=".repeat(60));
+              console.log(`Total target   : ${segments.length} gambar`);
+              console.log(`Berhasil       : ${allImages.length} gambar`);
+              console.log(`Gagal total    : ${allErrors.length} gambar`);
+              console.log(`Waktu          : ${elapsed} menit`);
+              console.log(`Status         : ${allErrors.length === 0 ? "✓ SEMUA BERHASIL" : `⚠️ ${allErrors.length} GAGAL`}`);
+              console.log("=".repeat(60));
+          })();
+          EOF
+          
+          node generate-images.js
+
+      - name: Create Artifacts Images
+        if: always()
+        run: |
+          mkdir -p release/images
+          cd release
+          zip -r images.zip images/ || echo "Tidak ada gambar untuk di-zip, lanjut tanpa images.zip"
+          cd ..
+
+      - name: Upload Artifacts ke Job 2
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-assets
+          retention-days: 1
+          path: |
+            output/audio.wav
+            release/analysis.json
+            release/images/
+            release/thumbnail.jpg
+            release/images.zip
+
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    needs: generate
+    if: always()
+
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LANGUAGE: ${{ github.event.inputs.language }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-auth google-auth-oauthlib
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+
+      - name: Prepare Workspace
+        run: mkdir -p output release/images
+
+      - name: Download Artifacts dari Job 1
+        uses: actions/download-artifact@v4
+        with:
+          name: pipeline-assets
+          path: .
+      
+      - name: Verify Artifacts & Restore Folder Structure
+        run: |
+          mkdir -p output release/images
+          [ -f audio.wav ] && mv audio.wav output/audio.wav || true
+          [ -f analysis.json ] && mv analysis.json release/analysis.json || true
+          [ -f thumbnail.jpg ] && mv thumbnail.jpg release/thumbnail.jpg || true
+          echo "=== Struktur setelah restore ==="
+          ls -lh output/ release/ release/images/ 2>/dev/null || true
+          echo "Audio   : $([ -f output/audio.wav ] && echo '✓ Ada' || echo '⚠️ TIDAK ADA')"
+          echo "Analysis: $([ -f release/analysis.json ] && echo '✓ Ada' || echo '⚠️ TIDAK ADA')"
+          echo "Images  : $(ls release/images/*.jpg 2>/dev/null | wc -l) file jpg"
+
+      - name: Compile Final Video
+        continue-on-error: true
+        run: |
+          python3 << 'PYEOF'
+          import json, os, subprocess, sys, shutil, wave, math
+
+          print("\n" + "="*70)
+          print(" CONVERTING IMAGES & AUDIO TO 16:9 WIDESCREEN VIDEO ")
+          print("="*70 + "\n")
+
+          try:
+              if shutil.which("ffmpeg") is None:
+                  raise RuntimeError("ffmpeg tidak ditemukan di PATH. Cek step 'Install FFmpeg'.")
+
+              with open("release/analysis.json", "r", encoding="utf8") as f:
+                  analysis = json.load(f)
+
+              segments = analysis["segments"]
+
+              TRANSITION_MAP = {
+                  "fade": "fadeblack",
+                  "crossfade": "fade",
+                  "wipe_left": "wipeleft",
+                  "wipe_right": "wiperight",
+                  "slide_up": "slideup",
+                  "zoom_blur": "zoomin",
+                  "none": "fade",
+              }
+              MIN_TRANS_DUR = 0.04   # ~1 frame @25fps, dipakai utk transition_effect "none" (hard cut)
+              MAX_TRANS_DUR = 1.5    # batas atas supaya tidak makan durasi klip pendek
+              FPS = 25
+
+              def build_vf(movement, duration):
+                  """
+                  PERBAIKAN UTAMA: zoompan ffmpeg punya bug terkenal kalau sumbernya
+                  gambar statis yang di-loop (-loop 1) -- variabel 'in' (input frame)
+                  TIDAK bertambah per frame, jadi ekspresi yang memakai 'in' (semua
+                  pan_* sebelumnya) menghasilkan posisi statis/diam, bukan bergerak.
+                  Solusi resmi yang direkomendasikan komunitas ffmpeg: pakai 'on'
+                  (output frame number), yang dijamin selalu bertambah per frame.
+                  Kita hitung total_frames secara eksplisit di Python lalu suntikkan
+                  sebagai angka literal ke ekspresi, jadi progress = on/total_frames
+                  selalu 0 -> 1 sepanjang klip, terlepas dari versi ffmpeg.
+                  """
+                  total_frames = max(1, int(round(duration * FPS)))
+
+                  if "zoom_in" in movement:
+                      z = f"1+0.3*on/{total_frames}"
+                      vf = f"scale=2560:1440,zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "zoom_out" in movement:
+                      z = f"1.3-0.3*on/{total_frames}"
+                      vf = f"scale=2560:1440,zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "pan_right" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='(on/{total_frames})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "pan_left" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='(1-(on/{total_frames}))*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':s=1920x1080"
+                  elif "pan_up" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='iw/2-(iw/zoom/2)':y='(1-(on/{total_frames}))*(ih-ih/zoom)':s=1920x1080"
+                  elif "pan_down" in movement:
+                      vf = f"scale=2560:1440,zoompan=z=1.2:d=1:x='iw/2-(iw/zoom/2)':y='(on/{total_frames})*(ih-ih/zoom)':s=1920x1080"
+                  else:
+                      vf = "scale=1920:1080"
+                  return vf
+
+              clips = []
+              last_good_image = None
+              reused_count = 0
+              skipped_count = 0
+
+              import concurrent.futures
+
+              # Kumpulkan info segmen dulu (berurutan — butuh last_good_image sequential)
+              seg_tasks = []
+              for i, seg in enumerate(segments):
+                  idx_str = str(i+1).zfill(3)
+                  img_path = f"release/images/{idx_str}.jpg"
+                  duration = float(seg.get("duration", 5.0))
+                  if duration <= 0:
+                      duration = 5.0
+
+                  if os.path.exists(img_path):
+                      last_good_image = img_path
+                  elif last_good_image:
+                      img_path = last_good_image
+                      reused_count += 1
+                  else:
+                      print(f"⚠️ Gambar {idx_str} tidak ada dan belum ada fallback — dilewati.")
+                      skipped_count += 1
+                      continue
+
+                  seg_tasks.append({
+                      "idx_str": idx_str,
+                      "img_path": img_path,
+                      "duration": duration,
+                      "movement": seg.get("camera_movement", "static"),
+                      "transition_effect": seg.get("transition_effect", "fade"),
+                      "transition_duration": float(seg.get("transition_duration", 0.5) or 0.5),
+                  })
+
+              def encode_segment(task):
+                  idx_str = task["idx_str"]
+                  segment_video = f"release/seg_{idx_str}.mp4"
+                  vf_effects = build_vf(task["movement"], task["duration"])
+                  cmd = [
+                      "ffmpeg", "-y", "-loop", "1", "-i", task["img_path"],
+                      "-vf", vf_effects, "-c:v", "libx264",
+                      "-preset", "slow", "-crf", "19",
+                      "-threads", "2",
+                      "-t", str(task["duration"]),
+                      "-pix_fmt", "yuv420p", "-r", str(FPS), segment_video
+                  ]
+                  result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                  if result.returncode != 0:
+                      return None, f"ffmpeg gagal segmen {idx_str}: {result.stderr.decode(errors='ignore')[:150]}"
+                  return segment_video, None
+
+              print(f"Encoding {len(seg_tasks)} segmen paralel (4 workers, preset ultrafast)...")
+              seg_results = {}
+              with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                  future_to_task = {executor.submit(encode_segment, t): t for t in seg_tasks}
+                  for future in concurrent.futures.as_completed(future_to_task):
+                      task = future_to_task[future]
+                      seg_video, err = future.result()
+                      if err:
+                          print(f"⚠️ {err}")
+                          skipped_count += 1
+                      else:
+                          seg_results[task["idx_str"]] = (seg_video, task)
+
+              # Susun clips dalam urutan asli
+              for task in seg_tasks:
+                  if task["idx_str"] not in seg_results:
+                      continue
+                  seg_video, _ = seg_results[task["idx_str"]]
+                  trans_dur = task["transition_duration"]
+                  trans_dur = max(MIN_TRANS_DUR, min(trans_dur, MAX_TRANS_DUR, task["duration"] / 2))
+                  clips.append({
+                      "path": seg_video,
+                      "duration": task["duration"],
+                      "transition_effect": task["transition_effect"],
+                      "transition_duration": trans_dur,
+                  })
+
+              total_visual = sum(c["duration"] for c in clips)
+              total_transitions = sum(c["transition_duration"] for c in clips[:-1]) if len(clips) > 1 else 0
+              expected_visual = total_visual - total_transitions
+
+              print(f"\nSegmen total     : {len(segments)}")
+              print(f"Klip berhasil    : {len(clips)}")
+              print(f"Klip dilewati    : {skipped_count}")
+              print(f"Klip fallback    : {reused_count}")
+              print(f"Durasi visual est: {expected_visual:.2f}s (sebelum padding)")
+
+              if not clips:
+                  raise RuntimeError("Semua segmen gagal diproses, tidak ada video yang bisa disambung.")
+
+              print(f"\nMenyambungkan {len(clips)} klip video 16:9 dengan transisi xfade...")
+
+              if len(clips) == 1:
+                  shutil.copy(clips[0]["path"], "release/visual_only.mp4")
+              else:
+                  # Chunk xfade per 30 klip agar ffmpeg tidak kehabisan memory/timeout
+                  # Lalu concat semua chunk dengan concat demuxer (cepat, no re-encode)
+                  CHUNK_SIZE = 30
+                  chunk_paths = []
+
+                  def xfade_chunk(chunk_clips, out_path):
+                      inputs_args = []
+                      for c in chunk_clips:
+                          inputs_args += ["-i", c["path"]]
+                      filter_parts = []
+                      cum_dur = chunk_clips[0]["duration"]
+                      prev_label = "0:v"
+                      for i in range(1, len(chunk_clips)):
+                          ttype = TRANSITION_MAP.get(chunk_clips[i-1]["transition_effect"], "fade")
+                          d = chunk_clips[i-1]["transition_duration"]
+                          offset = max(0.0, cum_dur - d)
+                          out_label = f"v{i}"
+                          filter_parts.append(
+                              f"[{prev_label}][{i}:v]xfade=transition={ttype}:duration={d:.3f}:offset={offset:.3f}[{out_label}]"
+                          )
+                          cum_dur = cum_dur + chunk_clips[i]["duration"] - d
+                          prev_label = out_label
+                      cmd = ["ffmpeg", "-y"] + inputs_args + [
+                          "-filter_complex", ";".join(filter_parts),
+                          "-map", f"[{prev_label}]",
+                          "-c:v", "libx264", "-preset", "slow", "-crf", "19",
+                          "-pix_fmt", "yuv420p", "-r", str(FPS), out_path
+                      ]
+                      r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                      if r.returncode != 0:
+                          raise RuntimeError(f"xfade chunk gagal: {r.stderr.decode(errors='ignore')[:300]}")
+
+                  total_chunks = math.ceil(len(clips) / CHUNK_SIZE)
+                  print(f"Membagi {len(clips)} klip ke {total_chunks} chunk (maks {CHUNK_SIZE} klip/chunk)...")
+
+                  for ci in range(total_chunks):
+                      chunk = clips[ci * CHUNK_SIZE : (ci + 1) * CHUNK_SIZE]
+                      chunk_out = f"release/chunk_{ci:03d}.mp4"
+                      print(f"  xfade chunk {ci+1}/{total_chunks} ({len(chunk)} klip)...")
+                      if len(chunk) == 1:
+                          shutil.copy(chunk[0]["path"], chunk_out)
+                      else:
+                          xfade_chunk(chunk, chunk_out)
+                      chunk_paths.append(chunk_out)
+
+                  if len(chunk_paths) == 1:
+                      shutil.copy(chunk_paths[0], "release/visual_only.mp4")
+                  else:
+                      # Concat semua chunk tanpa re-encode (concat demuxer)
+                      list_file = "release/chunks.txt"
+                      with open(list_file, "w") as f:
+                          for p in chunk_paths:
+                              f.write(f"file '{os.path.abspath(p)}'\n")
+                      concat_cmd = [
+                          "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                          "-i", list_file,
+                          "-c", "copy",
+                          "release/visual_only.mp4"
+                      ]
+                      print(f"Concat {len(chunk_paths)} chunk menjadi visual_only.mp4...")
+                      result = subprocess.run(concat_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                      if result.returncode != 0 or not os.path.exists("release/visual_only.mp4"):
+                          raise RuntimeError(f"Gagal concat chunk: {result.stderr.decode(errors='ignore')[:300]}")
+
+              with wave.open("output/audio.wav", "rb") as wf:
+                  audio_duration = wf.getnframes() / float(wf.getframerate())
+
+              probe = subprocess.run(
+                  ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                   "-of", "default=noprint_wrappers=1:nokey=1", "release/visual_only.mp4"],
+                  capture_output=True, text=True
+              )
+              video_duration = float(probe.stdout.strip() or 0)
+              diff = audio_duration - video_duration
+              print(f"\nDurasi audio asli   : {audio_duration:.2f}s")
+              print(f"Durasi visual track  : {video_duration:.2f}s (selisih: {diff:+.2f}s)")
+
+              visual_path = "release/visual_only.mp4"
+              if diff > 0.15:
+                  print(f"Visual lebih pendek dari audio, extend {diff:.2f}s dengan freeze-frame terakhir...")
+                  pad_cmd = [
+                      "ffmpeg", "-y", "-i", "release/visual_only.mp4",
+                      "-vf", f"tpad=stop_mode=clone:stop_duration={diff:.3f}",
+                      "-c:v", "libx264", "-preset", "slow", "-crf", "19",
+                      "-threads", "0",
+                      "-pix_fmt", "yuv420p", "-r", str(FPS),
+                      "release/visual_padded.mp4"
+                  ]
+                  result = subprocess.run(pad_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                  if result.returncode == 0 and os.path.exists("release/visual_padded.mp4"):
+                      visual_path = "release/visual_padded.mp4"
+                  else:
+                      print(f"⚠️ Gagal extend video, lanjut tanpa padding: {result.stderr.decode(errors='ignore')[:300]}")
+
+              print("Menggabungkan visual dengan audio narasi asli (durasi dikunci ke durasi audio)...")
+              final_cmd = [
+                  "ffmpeg", "-y", "-i", visual_path, "-i", "output/audio.wav",
+                  "-c:v", "copy" if visual_path == "release/visual_only.mp4" and diff <= 0.15 else "libx264",
+                  "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-t", f"{audio_duration:.3f}",
+                  "output/final_project_video.mp4"
+              ]
+              result = subprocess.run(final_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+              if result.returncode != 0 or not os.path.exists("output/final_project_video.mp4"):
+                  raise RuntimeError(f"Gagal menggabungkan video & audio: {result.stderr.decode(errors='ignore')[:300]}")
+
+              print("\n" + "="*70)
+              print("✓ BERHASIL: Video final panjang 16:9 disimpan di 'output/final_project_video.mp4'")
+              print("="*70)
+
+          except Exception as e:
+              print("\n" + "="*70)
+              print(f"⚠️ GAGAL membuat video final: {e}")
+              print("Pipeline TETAP dilanjutkan tanpa final_project_video.mp4.")
+              print("Asset yang tetap akan dipublish ke release: output/audio.wav, release/analysis.json, release/images.zip")
+              print("="*70)
+
+          sys.exit(0)
+          PYEOF
+
+      - name: Zip Images (dari artifact Job 1)
+        if: always()
+        run: |
+          mkdir -p release/images
+          cd release
+          zip -r images.zip images/ || echo "Tidak ada gambar untuk di-zip"
+          cd ..
+
+      - name: Upload Video to YouTube
+        if: always()
+        continue-on-error: true
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_PRIVACY: ${{ github.event.inputs.youtube_privacy }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, sys
+
+          try:
+              VIDEO_PATH = "output/final_project_video.mp4"
+              THUMBNAIL_PATH = "release/thumbnail.jpg"
+              ANALYSIS_PATH = "release/analysis.json"
+
+              if not os.path.exists(VIDEO_PATH):
+                  print("⚠️ output/final_project_video.mp4 tidak ada, skip upload ke YouTube.")
+                  sys.exit(0)
+
+              required_secrets = ["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"]
+              missing = [s for s in required_secrets if not os.environ.get(s)]
+              if missing:
+                  print(f"⚠️ Secret belum diset: {', '.join(missing)}. Skip upload ke YouTube.")
+                  print("Lihat panduan setup OAuth YouTube di pesan chat untuk cara mendapatkannya.")
+                  sys.exit(0)
+
+              from google.oauth2.credentials import Credentials
+              from googleapiclient.discovery import build
+              from googleapiclient.http import MediaFileUpload
+
+              with open(ANALYSIS_PATH, "r", encoding="utf8") as f:
+                  analysis = json.load(f)
+
+              title = (analysis.get("youtube_title") or "Psychological Narrative").strip()[:100]
+              description = analysis.get("youtube_description") or ""
+              tags = analysis.get("youtube_tags") or []
+              privacy_status = os.environ.get("YOUTUBE_PRIVACY") or "private"
+
+              print("\n" + "="*70)
+              print(" UPLOAD VIDEO KE YOUTUBE ")
+              print("="*70)
+              print(f"Judul     : {title}")
+              print(f"Privacy   : {privacy_status}")
+              print(f"Tags      : {len(tags)} tags\n")
+
+              creds = Credentials(
+                  token=None,
+                  refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
+                  client_id=os.environ["YOUTUBE_CLIENT_ID"],
+                  client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
+                  token_uri="https://oauth2.googleapis.com/token",
+                  scopes=["https://www.googleapis.com/auth/youtube.upload"],
+              )
+
+              youtube = build("youtube", "v3", credentials=creds)
+
+              body = {
+                  "snippet": {
+                      "title": title,
+                      "description": description,
+                      "tags": tags,
+                      "categoryId": "27",
+                  },
+                  "status": {
+                      "privacyStatus": privacy_status,
+                      "selfDeclaredMadeForKids": False,
+                  },
+              }
+
+              media = MediaFileUpload(VIDEO_PATH, chunksize=-1, resumable=True, mimetype="video/mp4")
+              request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+              response = None
+              while response is None:
+                  status, response = request.next_chunk()
+                  if status:
+                      print(f"  Upload progress: {int(status.progress() * 100)}%")
+
+              video_id = response["id"]
+              print(f"\n✓ Video berhasil diupload. Video ID: {video_id}")
+              print(f"  URL: https://youtu.be/{video_id}")
+
+              if os.path.exists(THUMBNAIL_PATH):
+                  print("\nMengatur thumbnail...")
+                  try:
+                      youtube.thumbnails().set(
+                          videoId=video_id,
+                          media_body=MediaFileUpload(THUMBNAIL_PATH, mimetype="image/jpeg")
+                      ).execute()
+                      print("✓ Thumbnail berhasil diset.")
+                  except Exception as e:
+                      print(f"⚠️ Video tetap terupload, tapi gagal set thumbnail: {e}")
+              else:
+                  print("⚠️ release/thumbnail.jpg tidak ditemukan, skip set thumbnail.")
+
+              with open("release/youtube_video_id.txt", "w", encoding="utf8") as f:
+                  f.write(f"https://youtu.be/{video_id}\n")
+
+              print("\n" + "="*70)
+              print("✓ UPLOAD YOUTUBE SELESAI")
+              print("="*70)
+
+          except Exception as e:
+              print("\n" + "="*70)
+              print(f"⚠️ GAGAL upload ke YouTube: {e}")
+              print("Pipeline tetap dilanjutkan, asset lain tetap dipublish ke release.")
+              print("="*70)
+
+          sys.exit(0)
+          PYEOF
+
+      - name: Prepare Release Files (pastikan semua file ada sebelum publish)
+        if: always()
+        run: |
+          # Buat placeholder untuk file opsional yang mungkin tidak ada
+          # Supaya softprops/action-gh-release tidak error karena file missing
+          [ -f output/final_project_video.mp4 ] && echo "✓ Video ada" || echo "⚠️ Video tidak ada, skip"
+          [ -f release/youtube_video_id.txt ]   && echo "✓ YouTube ID ada" || echo "YouTube ID tidak ada" > release/youtube_video_id.txt
+          [ -f release/thumbnail.jpg ]           && echo "✓ Thumbnail ada" || echo "⚠️ Thumbnail tidak ada"
+          [ -f release/images.zip ]              && echo "✓ Images zip ada" || echo "⚠️ Images zip tidak ada"
+          [ -f output/audio.wav ]                && echo "✓ Audio ada" || echo "⚠️ Audio tidak ada"
+          [ -f release/analysis.json ]           && echo "✓ Analysis ada" || echo "⚠️ Analysis tidak ada"
+
+      - name: Publish Release Assets
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: run-${{ github.run_number }}
+          name: Storyboard & Video Widescreen Project ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          preserve_order: true
+          fail_on_unmatched_files: false
+          files: |
+            output/audio.wav
+            output/final_project_video.mp4
+            release/analysis.json
+            release/images.zip
+            release/thumbnail.jpg
+            release/youtube_video_id.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
