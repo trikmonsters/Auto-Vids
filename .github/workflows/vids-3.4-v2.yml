@@ -84,88 +84,226 @@ jobs:
           mkdir -p output release
 
       - name: Generate Narrative via Gemini API
+        shell: bash
+        env:
+          TOPIC: ${{ github.event.inputs.topic }}
+          LANGUAGE: ${{ github.event.inputs.language }}
         run: |
-          LANGUAGE="${{ github.event.inputs.language }}"
-          TOPIC="${{ github.event.inputs.topic }}"
-          API_KEYS=("${GEMINI_API_KEY}" "${GEMINI_API_KEY_2}" "${GEMINI_API_KEY_3}")
-          MODELS=("gemini-3.6-flash" "gemini-3.5-flash" "gemini-3.1-flash-lite" "gemini-3-flash-preview")
-          SUCCESS=false
-          MAX_RETRY=3
+          set -Eeuo pipefail
+      
           mkdir -p release
-
-          PROMPT="You are an elite YouTube Growth Strategist, behavioral scientist, and psychological narrative designer.
-
-          Based on this topic: \"${TOPIC}\"
-          Language: ${LANGUAGE}
+      
+          API_KEYS=(
+            "${GEMINI_API_KEY}"
+            "${GEMINI_API_KEY_2}"
+            "${GEMINI_API_KEY_3}"
+          )
+      
+          MODELS=(
+            "gemini-3.6-flash"
+            "gemini-3.5-flash"
+            "gemini-3.1-flash-lite"
+            "gemini-3-flash-preview"
+          )
+      
+          MAX_RETRY=3
+          SUCCESS=false
+      
+          PROMPT=$(cat <<EOF
+          You are an elite YouTube Growth Strategist, behavioral scientist, and psychological narrative designer.
           
-          Produce a single JSON object with exactly these two fields:
+          Based on this topic:
           
-          1. \"narrative\": A highly immersive psychological narrative (2000+ words max -2500 words) in fluent ${LANGUAGE}. Rules: start in the middle (no greeting), every paragraph 2-3 sentences preceded by a TTS tag containing STRICTLY SLOW pace, cycle through these tags: [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery] / [cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses] / [assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence] / [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery] / [rhetorical tone, STRICTLY SLOW pace, long philosophical pause] / [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]. Rooted in real psychology and cognitive science. No assistant text, no follow-up.
+          $TOPIC
           
-          2. \"metadata\": A JSON object with: youtube_title (50-70 chars, provocative, SEO-strong, honest), youtube_description (150-300 words, first 2 sentences = hook, 3-5 keywords, end with CTA), youtube_tags (12-20 tags most-relevant first), thumbnail_prompt (400-700 chars: 2D stickman scene, white background, black line art only, LEFT 40% bold ALL-CAPS hook text in ${LANGUAGE} 2-3 lines, RIGHT 60% stickman scene uniquely illustrating this exact topic with 1-2 relevant props and a short label in ${LANGUAGE}). Use these analysis frameworks: long-tail SEO queries, anti-topic chaos consistency, psychological hook from the most counterintuitive insight, audience intent alignment.
+          Language:
+          $LANGUAGE
           
-          Output ONLY valid JSON: {\"narrative\": \"...\", \"metadata\": {\"youtube_title\": \"...\", \"youtube_description\": \"...\", \"youtube_tags\": [...], \"thumbnail_prompt\": \"...\"}}"
-
-          cat > request.json << EOF
+          Produce a single JSON object with exactly these fields:
+          
           {
-            "model": "models/gemini-3.5-flash",
-            "input": "${PROMPT//"/\"}",
-            "generation_config": {
-              "max_output_tokens": 65536,
-              "thinking_level": "high"
+            "narrative":"...",
+            "metadata":{
+              "youtube_title":"...",
+              "youtube_description":"...",
+              "youtube_tags":[],
+              "thumbnail_prompt":"..."
             }
           }
+          
+          Narrative:
+          - 2000-2500 words
+          - Fluent $LANGUAGE
+          - Start immediately
+          - No greeting
+          - No markdown
+          - No explanation
+          - No extra text
+          
+          Metadata:
+          - youtube_title: 50-70 chars
+          - youtube_description: 150-300 words
+          - youtube_tags: 12-20 tags
+          - thumbnail_prompt: 400-700 chars
+          
+          Return ONLY valid JSON.
           EOF
-
-          for i in "${!API_KEYS[@]}"; do
-            KEY="${API_KEYS[$i]}"
-            [ -z "$KEY" ] && continue
-            for m in "${!MODELS[@]}"; do
-              MODEL="${MODELS[$m]}"
-              for retry in $(seq 1 $MAX_RETRY); do
-                echo "======================================"
-                echo "Key $((i+1)) | Model: $MODEL | Retry $retry/$MAX_RETRY"
-                echo "======================================"
-                jq --arg m "models/$MODEL" '.model = $m' request.json > request_tmp.json && mv request_tmp.json request.json
-                curl -s -X POST                   -H "Content-Type: application/json"                   "https://generativelanguage.googleapis.com/v1beta/interactions?key=${KEY}"                   -d @request.json                   -o response.json
-                ERROR_MSG=$(cat response.json | head -c 300)
-                if echo "$ERROR_MSG" | grep -qi "high demand\|overload\|temporarily\|503\|UNAVAILABLE"; then
-                  echo "⚠️ Overload $MODEL, tunggu 20 detik..."
-                  sleep 20; continue
-                fi
-                if echo "$ERROR_MSG" | grep -qi "quota\|429\|RESOURCE_EXHAUSTED\|rate limit"; then
-                  echo "⚠️ Kuota Key $((i+1)) habis, coba model berikutnya..."
-                  break
-                fi
-                RAW=$(jq -r '.steps[] | select(.type=="model_output") | .content[] | select(.type=="text") | .text' response.json 2>/dev/null)
-                NARRATIVE=$(echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('narrative',''))" 2>/dev/null)
-                WORDS=$(echo "$NARRATIVE" | wc -w)
-                if [ "${WORDS:-0}" -gt 100 ] 2>/dev/null; then
-                  echo "$NARRATIVE" > tts-script.txt
-                  echo "$RAW" | python3 -c "import sys,json; d=json.load(sys.stdin); json.dump(d.get('metadata',{}), sys.stdout, ensure_ascii=False)" 2>/dev/null > release/metadata.json
-                  echo "✓ Berhasil — Key $((i+1)) | Model: $MODEL | $WORDS kata"
-                  echo "  Judul: $(jq -r '.youtube_title' release/metadata.json)"
-                  SUCCESS=true
-                  break 3
-                else
-                  echo "⚠️ Response tidak valid atau narrative kosong"
-                fi
+          )
+        
+            jq -n \
+              --arg model "models/gemini-3.5-flash" \
+              --arg input "$PROMPT" \
+              '{
+                  model:$model,
+                  input:$input,
+                  generation_config:{
+                      max_output_tokens:65536,
+                      thinking_level:"high"
+                  }
+              }' > request.json
+        
+            for KEY in "${API_KEYS[@]}"
+            do
+        
+              [[ -z "$KEY" ]] && continue
+        
+              for MODEL in "${MODELS[@]}"
+              do
+        
+                for RETRY in $(seq 1 $MAX_RETRY)
+                do
+        
+                  echo "======================================="
+                  echo "Model : $MODEL"
+                  echo "Retry : $RETRY/$MAX_RETRY"
+                  echo "======================================="
+        
+                  jq \
+                    --arg m "models/$MODEL" \
+                    '.model=$m' \
+                    request.json \
+                    > request_tmp.json
+        
+                  mv request_tmp.json request.json
+        
+                  HTTP_CODE=$(
+                    curl \
+                      -s \
+                      -o response.json \
+                      -w "%{http_code}" \
+                      -H "Content-Type: application/json" \
+                      "https://generativelanguage.googleapis.com/v1beta/interactions?key=$KEY" \
+                      -d @request.json
+                  )
+        
+                  echo "HTTP : $HTTP_CODE"
+        
+                  case "$HTTP_CODE" in
+                    429)
+                      echo "Quota exhausted."
+                      break
+                      ;;
+                    500|502|503|504)
+                      echo "Temporary server error."
+                      sleep 15
+                      continue
+                      ;;
+                  esac
+        
+                  [[ ! -s response.json ]] && {
+                    echo "Empty response."
+                    sleep 10
+                    continue
+                  }
+        
+                  RAW=$(jq -r '
+                    .steps[]
+                    | select(.type=="model_output")
+                    | .content[]
+                    | select(.type=="text")
+                    | .text
+                  ' response.json 2>/dev/null)
+        
+                  if [[ -z "$RAW" || "$RAW" == "null" ]]; then
+                    RAW=$(jq -r '
+                      .candidates[0].content.parts[0].text
+                    ' response.json 2>/dev/null)
+                  fi
+      
+                [[ -z "$RAW" || "$RAW" == "null" ]] && {
+                  echo "No model output."
+                  sleep 10
+                  continue
+                }
+      
+                RAW=$(printf "%s" "$RAW" \
+                  | sed '1s/^```json//' \
+                  | sed '1s/^```//' \
+                  | sed '$s/```$//')
+      
+                echo "$RAW" | jq empty >/dev/null 2>&1 || {
+                  echo "Invalid JSON."
+                  printf "%s" "$RAW" > invalid_response.txt
+                  sleep 10
+                  continue
+                }
+      
+                NARRATIVE=$(printf "%s" "$RAW" | jq -r '.narrative')
+      
+                printf "%s" "$RAW" \
+                  | jq '.metadata' \
+                  > release/metadata.json
+      
+                [[ -z "$NARRATIVE" || "$NARRATIVE" == "null" ]] && {
+                  echo "Narrative empty."
+                  sleep 10
+                  continue
+                }
+      
+                WORDS=$(printf "%s" "$NARRATIVE" | wc -w)
+      
+                echo "Words : $WORDS"
+      
+                [[ "$WORDS" -lt 1000 ]] && {
+                  echo "Narrative too short."
+                  sleep 10
+                  continue
+                }
+      
+                printf "%s" "$NARRATIVE" > tts-script.txt
+      
+                echo
+                echo "======================================="
+                echo "SUCCESS"
+                echo "======================================="
+                echo "Model : $MODEL"
+                echo "Words : $WORDS"
+                echo "Title : $(jq -r '.youtube_title' release/metadata.json)"
+                echo "======================================="
+      
+                SUCCESS=true
+      
+                break 3
+      
               done
-              [ "$SUCCESS" = "true" ] && break
+      
             done
-            [ "$SUCCESS" = "true" ] && break
-            echo "↩ Semua model Key $((i+1)) gagal, pindah ke Key $((i+2))..."
+      
           done
-
-          if [ "$SUCCESS" != "true" ]; then
-            echo "❌ Semua API key dan model gagal. Pipeline dihentikan."
+      
+          if [[ "$SUCCESS" != true ]]; then
+            echo "All API keys and models failed."
             exit 1
           fi
-
-          echo "======================================"
-          echo "Generated Words : $(wc -w < tts-script.txt)"
-          echo "======================================"
-          cat tts-script.txt
+      
+          echo
+          echo "======================================="
+          echo "GENERATION COMPLETED"
+          echo "======================================="
+      
+          wc -w tts-script.txt
+      
+          jq . release/metadata.json
 
 
       - name: Generate TTS Audio (REST API & Sequential Safe Mode)
