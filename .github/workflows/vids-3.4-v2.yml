@@ -751,7 +751,7 @@ jobs:
                   text_chunk=chunk_text,
                   expected_duration=chunk_expected_dur,
                   target_segments=chunk_target_segments,
-                  min_segments=chunk_min_segments
+                  min_segments=chunk_min_segments,
                   LANGUAGE=LANGUAGE
               )
 
